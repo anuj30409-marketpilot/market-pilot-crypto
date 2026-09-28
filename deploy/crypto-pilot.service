@@ -1,0 +1,21 @@
+[Unit]
+Description=Market Pilot Crypto Research Daemon (WebSocket + API)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/market-pilot-crypto
+ExecStart=/home/ubuntu/market-pilot-crypto/.venv/bin/python main.py
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=10
+
+# Memory & Process Sandboxing
+MemoryMax=600M
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
