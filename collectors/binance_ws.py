@@ -20,6 +20,7 @@ from core.clock import now_utc_ms
 from core.contracts import Candle1m, AggTrade
 from core.state_machine import FeedStatus, FeedState
 from collectors.orderbook import BoundedOrderbook
+from collectors.derivatives import derivatives_engine
 from storage.sqlite_store import sqlite_store
 from storage.parquet_store import parquet_store
 
@@ -95,6 +96,10 @@ class BinanceStreamCollector:
                 # Store completed candles or update latest bar in SQLite
                 sqlite_store.upsert_candle(candle)
                 
+                # Update derivatives flow (CVD, taker buy ratio, snapshot on close)
+                feed_state_val = self.feed_statuses[symbol].state.value if symbol in self.feed_statuses else "NORMAL"
+                derivatives_engine.handle_candle_update(candle, feed_state_val)
+
                 if symbol in self.feed_statuses:
                     self.feed_statuses[symbol].mark_event(event_time_ms, received_ms)
                     sqlite_store.update_feed_status(self.feed_statuses[symbol])
@@ -135,6 +140,7 @@ class BinanceStreamCollector:
             # 4. Mark Price & Funding stream
             elif "@markPrice" in stream_name:
                 symbol = (payload.get("s") or "").upper()
+                derivatives_engine.handle_mark_price_message(symbol, payload)
                 if symbol in self.feed_statuses:
                     event_time_ms = payload.get("E", received_ms)
                     self.feed_statuses[symbol].mark_event(event_time_ms, received_ms)

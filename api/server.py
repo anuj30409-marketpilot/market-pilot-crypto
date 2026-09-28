@@ -8,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from config.settings import settings
 from collectors.binance_ws import collector
+from collectors.derivatives import derivatives_engine
+from core.contracts import CandidateRecord
 from storage.sqlite_store import sqlite_store
 from core.clock import now_utc_iso
 
@@ -69,3 +71,46 @@ def get_orderbook(symbol: str = Query("BTCUSDT")):
 def get_feeds():
     """Returns feed health and quarantine state machine records."""
     return sqlite_store.get_all_feed_statuses()
+
+@app.get("/derivatives")
+def get_derivatives(
+    symbol: str = Query("BTCUSDT", description="Symbol name e.g. BTCUSDT"),
+    limit: int = Query(50, ge=1, le=200)
+):
+    """Returns historical 1m derivatives state records and current live snapshot."""
+    upper = symbol.upper()
+    historical = sqlite_store.get_latest_derivatives_states(upper, limit)
+    
+    # Also fetch current live in-memory snapshot if available
+    live_snapshot = None
+    if upper in derivatives_engine.trackers:
+        state = derivatives_engine.trackers[upper].get_state()
+        if state:
+            live_snapshot = state.model_dump()
+            
+    return {
+        "symbol": upper,
+        "live": live_snapshot,
+        "count": len(historical),
+        "history": historical
+    }
+
+@app.get("/candidates")
+def get_candidates(
+    symbol: Optional[str] = Query(None, description="Optional symbol filter"),
+    limit: int = Query(50, ge=1, le=200)
+):
+    """Returns candidate ledger records including both accepted and rejected signals."""
+    candidates = sqlite_store.get_candidates(symbol, limit)
+    return {
+        "symbol": symbol.upper() if symbol else "ALL",
+        "count": len(candidates),
+        "candidates": candidates
+    }
+
+@app.post("/candidates")
+def record_candidate(record: CandidateRecord):
+    """Records a candidate evaluation (accepted or rejected) into the ledger."""
+    sqlite_store.insert_candidate(record)
+    return {"status": "RECORDED", "candidate_id": record.candidate_id}
+

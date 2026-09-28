@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import List, Optional
 from config.settings import settings
-from core.contracts import Candle1m, DerivativesState
+from core.contracts import Candle1m, DerivativesState, CandidateRecord
 from core.state_machine import FeedStatus
 
 class SQLiteStore:
@@ -78,6 +78,28 @@ class SQLiteStore:
 
             CREATE INDEX IF NOT EXISTS idx_crypto_deriv_state_time 
             ON crypto_derivatives_state (symbol, state_time_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS crypto_candidate_ledger (
+                candidate_id TEXT PRIMARY KEY,
+                timestamp_ms INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                origin TEXT NOT NULL,
+                engine_version TEXT NOT NULL,
+                model_version TEXT NOT NULL,
+                signal_version TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                decision_reason TEXT NOT NULL,
+                hypothetical_entry REAL,
+                hypothetical_exit REAL,
+                hypothetical_pnl REAL,
+                actual_paper_entry REAL,
+                actual_paper_exit REAL,
+                actual_pnl REAL,
+                created_at_iso TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_crypto_candidates_time 
+            ON crypto_candidate_ledger (symbol, timestamp_ms DESC);
             """)
             conn.commit()
 
@@ -143,6 +165,92 @@ class SQLiteStore:
     def get_all_feed_statuses(self) -> List[dict]:
         with self._get_connection() as conn:
             cur = conn.execute("SELECT * FROM crypto_feed_status ORDER BY feed_name, symbol")
+            return [dict(r) for r in cur.fetchall()]
+
+    def upsert_derivatives_state(self, s: DerivativesState):
+        with self._get_connection() as conn:
+            conn.execute("""
+            INSERT INTO crypto_derivatives_state (
+                symbol, mark_price, index_price, basis_bps,
+                open_interest, funding_rate, funding_zscore_7d,
+                cvd_1m, taker_buy_ratio_1m, quarantine_state,
+                state_time_ms, created_at_iso
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(symbol, state_time_ms) DO UPDATE SET
+                mark_price = excluded.mark_price,
+                index_price = excluded.index_price,
+                basis_bps = excluded.basis_bps,
+                open_interest = excluded.open_interest,
+                funding_rate = excluded.funding_rate,
+                funding_zscore_7d = excluded.funding_zscore_7d,
+                cvd_1m = excluded.cvd_1m,
+                taker_buy_ratio_1m = excluded.taker_buy_ratio_1m,
+                quarantine_state = excluded.quarantine_state,
+                created_at_iso = excluded.created_at_iso
+            """, (
+                s.symbol, s.mark_price, s.index_price, s.basis_bps,
+                s.open_interest, s.funding_rate, s.funding_zscore_7d,
+                s.cvd_1m, s.taker_buy_ratio_1m, s.quarantine_state,
+                s.state_time_ms, s.created_at_iso
+            ))
+            conn.commit()
+
+    def get_latest_derivatives_states(self, symbol: str, limit: int = 50) -> List[dict]:
+        with self._get_connection() as conn:
+            cur = conn.execute("""
+            SELECT * FROM crypto_derivatives_state
+            WHERE symbol = ?
+            ORDER BY state_time_ms DESC
+            LIMIT ?
+            """, (symbol.upper(), limit))
+            rows = cur.fetchall()
+            return [dict(r) for r in reversed(rows)]
+
+    def insert_candidate(self, c: CandidateRecord):
+        with self._get_connection() as conn:
+            conn.execute("""
+            INSERT INTO crypto_candidate_ledger (
+                candidate_id, timestamp_ms, symbol, origin,
+                engine_version, model_version, signal_version,
+                decision, decision_reason, hypothetical_entry,
+                hypothetical_exit, hypothetical_pnl,
+                actual_paper_entry, actual_paper_exit, actual_pnl,
+                created_at_iso
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(candidate_id) DO UPDATE SET
+                decision = excluded.decision,
+                decision_reason = excluded.decision_reason,
+                hypothetical_entry = excluded.hypothetical_entry,
+                hypothetical_exit = excluded.hypothetical_exit,
+                hypothetical_pnl = excluded.hypothetical_pnl,
+                actual_paper_entry = excluded.actual_paper_entry,
+                actual_paper_exit = excluded.actual_paper_exit,
+                actual_pnl = excluded.actual_pnl
+            """, (
+                c.candidate_id, c.timestamp_ms, c.symbol, c.origin,
+                c.engine_version, c.model_version, c.signal_version,
+                c.decision, c.decision_reason, c.hypothetical_entry,
+                c.hypothetical_exit, c.hypothetical_pnl,
+                c.actual_paper_entry, c.actual_paper_exit, c.actual_pnl,
+                c.created_at_iso
+            ))
+            conn.commit()
+
+    def get_candidates(self, symbol: Optional[str] = None, limit: int = 50) -> List[dict]:
+        with self._get_connection() as conn:
+            if symbol:
+                cur = conn.execute("""
+                SELECT * FROM crypto_candidate_ledger
+                WHERE symbol = ?
+                ORDER BY timestamp_ms DESC
+                LIMIT ?
+                """, (symbol.upper(), limit))
+            else:
+                cur = conn.execute("""
+                SELECT * FROM crypto_candidate_ledger
+                ORDER BY timestamp_ms DESC
+                LIMIT ?
+                """, (limit,))
             return [dict(r) for r in cur.fetchall()]
 
 sqlite_store = SQLiteStore()

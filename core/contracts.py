@@ -62,3 +62,21 @@ class DerivativesState(BaseModel):
     quarantine_state: str = "NORMAL"
     state_time_ms: int
     created_at_iso: str
+
+class CandidateRecord(BaseModel):
+    candidate_id: str
+    timestamp_ms: int
+    symbol: str
+    origin: str  # "QUANT", "ML", "SUPERHUMAN"
+    engine_version: str = "v1.0"
+    model_version: str = "v1.0"
+    signal_version: str = "v1.0"
+    decision: str  # "ACCEPT", "REJECT"
+    decision_reason: str
+    hypothetical_entry: Optional[float] = None
+    hypothetical_exit: Optional[float] = None
+    hypothetical_pnl: Optional[float] = None
+    actual_paper_entry: Optional[float] = None
+    actual_paper_exit: Optional[float] = None
+    actual_pnl: Optional[float] = None
+    created_at_iso: str
