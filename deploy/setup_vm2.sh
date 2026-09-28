@@ -17,7 +17,16 @@ else
     echo "Swapfile already exists."
 fi
 
-echo "=== 3. Setting up Python Virtual Environment ==="
+echo "=== 3. Configuring Local Firewall for Private VCN (Port 8800) ==="
+# Allow inbound TCP 8800 from private VCN subnet (10.0.0.0/24) where VM 1 resides
+sudo iptables -C INPUT -p tcp --dport 8800 -s 10.0.0.0/24 -j ACCEPT 2>/dev/null || \
+sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 8800 -s 10.0.0.0/24 -j ACCEPT
+
+if command -v netfilter-persistent &> /dev/null; then
+    sudo netfilter-persistent save || true
+fi
+
+echo "=== 4. Setting up Python Virtual Environment ==="
 cd /home/ubuntu/market-pilot-crypto
 if [ ! -d .venv ]; then
     python3 -m venv .venv
@@ -27,13 +36,13 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
-echo "=== 4. Installing systemd Service ==="
+echo "=== 5. Installing systemd Service ==="
 sudo cp deploy/crypto-pilot.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable crypto-pilot.service
 sudo systemctl restart crypto-pilot.service
 
-echo "=== 5. Verifying Service Status ==="
+echo "=== 6. Verifying Service Status ==="
 sudo systemctl status crypto-pilot.service --no-pager
 
 echo "=== Done! Crypto Research Daemon is now running on port 8800 ==="
