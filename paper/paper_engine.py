@@ -1,0 +1,388 @@
+"""Realistic crypto paper trading engine.
+
+Simulates perpetual futures positions with:
+- Orderbook-walk slippage on entry and exit
+- Taker fees (0.04%) on both legs
+- 8-hour funding rate charges at real rates from derivatives engine
+- Gap-risk multiplier on forced SL exits
+- Cross-margin liquidation guard (position wiped if margin < 0)
+
+All positions stored in SQLite crypto_paper_positions table.
+In-memory position cache for fast P&L updates on every mark price tick.
+"""
+import asyncio
+import logging
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
+
+from collectors.orderbook import BoundedOrderbook
+from collectors.derivatives import derivatives_engine
+from core.clock import now_utc_ms, now_utc_iso
+from paper.slippage import (
+    simulate_fill, get_ask_levels, get_bid_levels,
+    TAKER_FEE_BPS, FillResult
+)
+from storage.sqlite_store import sqlite_store
+
+logger = logging.getLogger("paper.engine")
+
+# Capital allocation per paper desk (USDT)
+PAPER_CAPITAL_USDT = 10_000.0
+
+# Default leverage (5x = 20% margin requirement)
+DEFAULT_LEVERAGE = 5
+
+# Maintenance margin ratio — position liquidated below this
+MAINTENANCE_MARGIN_RATIO = 0.005  # 0.5%
+
+# Funding interval in seconds (8 hours)
+FUNDING_INTERVAL_S = 8 * 3600
+
+
+@dataclass
+class PaperPosition:
+    position_id: str
+    symbol: str
+    direction: str            # "LONG" or "SHORT"
+    notional_usdt: float      # Total notional value
+    leverage: int
+    entry_price: float
+    entry_slippage_bps: float
+    entry_fee_usdt: float
+    margin_usdt: float        # notional / leverage
+
+    # Live-updated fields
+    mark_price: float = 0.0
+    unrealised_pnl: float = 0.0
+    funding_paid_usdt: float = 0.0
+    total_fees_usdt: float = 0.0
+
+    # Exit fields (filled on close)
+    exit_price: Optional[float] = None
+    exit_slippage_bps: Optional[float] = None
+    exit_fee_usdt: Optional[float] = None
+    realised_pnl: Optional[float] = None
+    exit_reason: Optional[str] = None
+    status: str = "OPEN"      # "OPEN" | "CLOSED" | "LIQUIDATED"
+
+    # Timestamps
+    opened_at_ms: int = field(default_factory=now_utc_ms)
+    closed_at_ms: Optional[int] = None
+    last_funding_at_ms: int = field(default_factory=now_utc_ms)
+
+    # Risk parameters set at open
+    stop_loss_price: Optional[float] = None
+    take_profit_price: Optional[float] = None
+
+    def update_mark(self, mark: float):
+        self.mark_price = mark
+        if self.direction == "LONG":
+            self.unrealised_pnl = (mark - self.entry_price) / self.entry_price * self.notional_usdt
+        else:
+            self.unrealised_pnl = (self.entry_price - mark) / self.entry_price * self.notional_usdt
+
+    def equity(self) -> float:
+        """Current margin equity = initial margin + unrealised PnL - fees paid."""
+        return self.margin_usdt + self.unrealised_pnl - self.total_fees_usdt - self.funding_paid_usdt
+
+    def is_liquidated(self) -> bool:
+        return self.equity() < self.notional_usdt * MAINTENANCE_MARGIN_RATIO
+
+    def to_dict(self) -> dict:
+        return {
+            "position_id": self.position_id,
+            "symbol": self.symbol,
+            "direction": self.direction,
+            "notional_usdt": self.notional_usdt,
+            "leverage": self.leverage,
+            "entry_price": self.entry_price,
+            "entry_slippage_bps": self.entry_slippage_bps,
+            "entry_fee_usdt": self.entry_fee_usdt,
+            "margin_usdt": self.margin_usdt,
+            "mark_price": self.mark_price,
+            "unrealised_pnl": self.unrealised_pnl,
+            "funding_paid_usdt": self.funding_paid_usdt,
+            "total_fees_usdt": self.total_fees_usdt,
+            "exit_price": self.exit_price,
+            "exit_slippage_bps": self.exit_slippage_bps,
+            "exit_fee_usdt": self.exit_fee_usdt,
+            "realised_pnl": self.realised_pnl,
+            "exit_reason": self.exit_reason,
+            "status": self.status,
+            "stop_loss_price": self.stop_loss_price,
+            "take_profit_price": self.take_profit_price,
+            "opened_at_ms": self.opened_at_ms,
+            "closed_at_ms": self.closed_at_ms,
+            "last_funding_at_ms": self.last_funding_at_ms,
+            "equity": self.equity(),
+            "roe_pct": (self.unrealised_pnl / self.margin_usdt * 100) if self.margin_usdt else 0.0,
+        }
+
+
+class PaperEngine:
+    """Realistic paper trading engine for crypto perpetual futures."""
+
+    def __init__(self):
+        # In-memory position store — position_id → PaperPosition
+        self._positions: Dict[str, PaperPosition] = {}
+        self._lock = asyncio.Lock()
+        sqlite_store.init_paper_tables()
+
+    # ── Public API ─────────────────────────────────────────────────────────
+
+    async def open_position(
+        self,
+        symbol: str,
+        direction: str,          # "LONG" or "SHORT"
+        notional_usdt: float,    # Size in USDT (e.g. 500)
+        leverage: int = DEFAULT_LEVERAGE,
+        stop_loss_price: Optional[float] = None,
+        take_profit_price: Optional[float] = None,
+        orderbooks: Optional[Dict[str, BoundedOrderbook]] = None,
+    ) -> dict:
+        """Open a new paper position with realistic orderbook-walk fill."""
+        symbol = symbol.upper()
+
+        # Get live orderbook levels for slippage
+        fill = self._simulate_entry(symbol, direction, notional_usdt, orderbooks)
+        if fill is None:
+            return {"error": "Orderbook unavailable — cannot simulate entry"}
+
+        margin = notional_usdt / leverage
+
+        pos = PaperPosition(
+            position_id=str(uuid.uuid4()),
+            symbol=symbol,
+            direction=direction.upper(),
+            notional_usdt=notional_usdt,
+            leverage=leverage,
+            entry_price=fill.avg_price,
+            entry_slippage_bps=fill.slippage_bps,
+            entry_fee_usdt=fill.fee_usdt,
+            margin_usdt=margin,
+            mark_price=fill.avg_price,
+            total_fees_usdt=fill.fee_usdt,
+            stop_loss_price=stop_loss_price,
+            take_profit_price=take_profit_price,
+        )
+
+        async with self._lock:
+            self._positions[pos.position_id] = pos
+            sqlite_store.upsert_paper_position(pos.to_dict())
+
+        logger.info(
+            f"[PAPER OPEN] {symbol} {direction} ${notional_usdt} "
+            f"entry={fill.avg_price:.2f} slippage={fill.slippage_bps:.2f}bps "
+            f"fee=${fill.fee_usdt:.4f}"
+        )
+        return pos.to_dict()
+
+    async def close_position(
+        self,
+        position_id: str,
+        reason: str = "MANUAL",
+        orderbooks: Optional[Dict[str, BoundedOrderbook]] = None,
+        gap_risk: bool = False,
+    ) -> dict:
+        """Close an open position with realistic exit slippage."""
+        async with self._lock:
+            pos = self._positions.get(position_id)
+            if pos is None:
+                return {"error": f"Position {position_id} not found"}
+            if pos.status != "OPEN":
+                return {"error": f"Position already {pos.status}"}
+
+            fill = self._simulate_exit(pos, orderbooks, gap_risk=gap_risk)
+            exit_price = fill.avg_price if fill else pos.mark_price
+            exit_fee = fill.fee_usdt if fill else pos.notional_usdt * TAKER_FEE_BPS / 10_000
+            exit_slippage = fill.slippage_bps if fill else 0.0
+
+            # Realised PnL = gross price move - both fees - funding paid
+            if pos.direction == "LONG":
+                gross_pnl = (exit_price - pos.entry_price) / pos.entry_price * pos.notional_usdt
+            else:
+                gross_pnl = (pos.entry_price - exit_price) / pos.entry_price * pos.notional_usdt
+
+            total_fees = pos.entry_fee_usdt + exit_fee + pos.funding_paid_usdt
+            realised_pnl = gross_pnl - total_fees
+
+            pos.exit_price = exit_price
+            pos.exit_slippage_bps = exit_slippage
+            pos.exit_fee_usdt = exit_fee
+            pos.total_fees_usdt = pos.entry_fee_usdt + exit_fee
+            pos.realised_pnl = realised_pnl
+            pos.exit_reason = reason
+            pos.status = "CLOSED"
+            pos.closed_at_ms = now_utc_ms()
+
+            sqlite_store.upsert_paper_position(pos.to_dict())
+
+        logger.info(
+            f"[PAPER CLOSE] {pos.symbol} {pos.direction} reason={reason} "
+            f"exit={exit_price:.2f} slippage={exit_slippage:.2f}bps "
+            f"pnl=${realised_pnl:.4f} fees=${total_fees:.4f}"
+        )
+        return pos.to_dict()
+
+    def get_positions(self, symbol: Optional[str] = None, status: str = "OPEN") -> List[dict]:
+        positions = [
+            p.to_dict() for p in self._positions.values()
+            if p.status == status and (symbol is None or p.symbol == symbol.upper())
+        ]
+        return sorted(positions, key=lambda x: x["opened_at_ms"], reverse=True)
+
+    def get_summary(self) -> dict:
+        open_pos = [p for p in self._positions.values() if p.status == "OPEN"]
+        closed_pos = [p for p in self._positions.values() if p.status == "CLOSED"]
+
+        total_unrealised = sum(p.unrealised_pnl for p in open_pos)
+        total_realised = sum(p.realised_pnl or 0.0 for p in closed_pos)
+        total_fees = sum(p.total_fees_usdt for p in self._positions.values())
+        total_funding = sum(p.funding_paid_usdt for p in self._positions.values())
+        margin_used = sum(p.margin_usdt for p in open_pos)
+
+        return {
+            "capital_usdt": PAPER_CAPITAL_USDT,
+            "margin_used_usdt": round(margin_used, 4),
+            "margin_free_usdt": round(PAPER_CAPITAL_USDT - margin_used, 4),
+            "open_positions": len(open_pos),
+            "total_trades": len(closed_pos),
+            "total_unrealised_pnl": round(total_unrealised, 4),
+            "total_realised_pnl": round(total_realised, 4),
+            "total_fees_paid_usdt": round(total_fees, 4),
+            "total_funding_paid_usdt": round(total_funding, 4),
+            "net_pnl": round(total_realised + total_unrealised, 4),
+        }
+
+    # ── Background loops ────────────────────────────────────────────────────
+
+    async def run_mark_price_updater(self):
+        """Update unrealised PnL and check SL/TP on every mark price tick (1s)."""
+        while True:
+            await asyncio.sleep(1)
+            async with self._lock:
+                for pos in list(self._positions.values()):
+                    if pos.status != "OPEN":
+                        continue
+                    tracker = derivatives_engine.trackers.get(pos.symbol)
+                    if tracker and tracker.mark_price:
+                        pos.update_mark(tracker.mark_price)
+                        self._check_sl_tp(pos)
+                        if pos.is_liquidated():
+                            pos.status = "LIQUIDATED"
+                            pos.exit_price = pos.mark_price
+                            pos.realised_pnl = -pos.margin_usdt
+                            pos.exit_reason = "LIQUIDATION"
+                            pos.closed_at_ms = now_utc_ms()
+                            sqlite_store.upsert_paper_position(pos.to_dict())
+                            logger.warning(f"[PAPER LIQUIDATED] {pos.symbol} {pos.direction} position_id={pos.position_id}")
+
+    async def run_funding_charger(self):
+        """Charge real funding rates every 8 hours to all open positions."""
+        while True:
+            await asyncio.sleep(60)  # Check every minute
+            now_ms = now_utc_ms()
+            async with self._lock:
+                for pos in self._positions.values():
+                    if pos.status != "OPEN":
+                        continue
+                    elapsed_s = (now_ms - pos.last_funding_at_ms) / 1000
+                    if elapsed_s < FUNDING_INTERVAL_S:
+                        continue
+
+                    tracker = derivatives_engine.trackers.get(pos.symbol)
+                    funding_rate = tracker.funding_rate if tracker else 0.0001
+                    # Funding charge: LONG pays rate, SHORT receives rate
+                    charge = pos.notional_usdt * abs(funding_rate)
+                    if pos.direction == "LONG" and funding_rate >= 0:
+                        pos.funding_paid_usdt += charge
+                    elif pos.direction == "SHORT" and funding_rate < 0:
+                        pos.funding_paid_usdt += charge
+                    else:
+                        pos.funding_paid_usdt -= charge  # Received funding
+
+                    pos.last_funding_at_ms = now_ms
+                    sqlite_store.upsert_paper_position(pos.to_dict())
+                    logger.info(
+                        f"[FUNDING] {pos.symbol} {pos.direction} "
+                        f"rate={funding_rate:.6f} charge=${charge:.4f}"
+                    )
+
+    # ── Internal helpers ────────────────────────────────────────────────────
+
+    def _simulate_entry(
+        self, symbol: str, direction: str, notional: float,
+        orderbooks: Optional[Dict]
+    ) -> Optional[FillResult]:
+        if not orderbooks or symbol not in orderbooks:
+            return None
+        ob = orderbooks[symbol]
+        snap = ob.get_snapshot()
+        mid = snap.mid_price
+        if direction.upper() == "LONG":
+            levels = get_ask_levels(ob)
+        else:
+            levels = get_bid_levels(ob)
+        return simulate_fill(direction.upper(), notional, levels, mid)
+
+    def _simulate_exit(
+        self, pos: PaperPosition,
+        orderbooks: Optional[Dict],
+        gap_risk: bool = False,
+    ) -> Optional[FillResult]:
+        if not orderbooks or pos.symbol not in orderbooks:
+            return None
+        ob = orderbooks[pos.symbol]
+        snap = ob.get_snapshot()
+        mid = snap.mid_price
+        # Closing LONG = selling, closing SHORT = buying
+        exit_side = "SELL" if pos.direction == "LONG" else "BUY"
+        if exit_side == "SELL":
+            levels = get_bid_levels(ob)
+        else:
+            levels = get_ask_levels(ob)
+        return simulate_fill(exit_side, pos.notional_usdt, levels, mid, gap_risk=gap_risk)
+
+    def _check_sl_tp(self, pos: PaperPosition):
+        """Trigger SL/TP exits synchronously within the mark-price loop lock."""
+        if pos.status != "OPEN":
+            return
+        mark = pos.mark_price
+        hit = False
+        reason = ""
+        gap = False
+        if pos.direction == "LONG":
+            if pos.stop_loss_price and mark <= pos.stop_loss_price:
+                hit, reason, gap = True, "STOP_LOSS", True
+            elif pos.take_profit_price and mark >= pos.take_profit_price:
+                hit, reason, gap = True, "TAKE_PROFIT", False
+        else:
+            if pos.stop_loss_price and mark >= pos.stop_loss_price:
+                hit, reason, gap = True, "STOP_LOSS", True
+            elif pos.take_profit_price and mark <= pos.take_profit_price:
+                hit, reason, gap = True, "TAKE_PROFIT", False
+
+        if hit:
+            # Close inline — we're already under the lock
+            exit_price = mark
+            exit_fee = pos.notional_usdt * TAKER_FEE_BPS / 10_000
+            if gap:
+                exit_fee *= 1.5  # Gap risk on SL
+            if pos.direction == "LONG":
+                gross = (exit_price - pos.entry_price) / pos.entry_price * pos.notional_usdt
+            else:
+                gross = (pos.entry_price - exit_price) / pos.entry_price * pos.notional_usdt
+            total_fees = pos.entry_fee_usdt + exit_fee + pos.funding_paid_usdt
+            pos.exit_price = exit_price
+            pos.exit_fee_usdt = exit_fee
+            pos.realised_pnl = gross - total_fees
+            pos.exit_reason = reason
+            pos.status = "CLOSED"
+            pos.closed_at_ms = now_utc_ms()
+            sqlite_store.upsert_paper_position(pos.to_dict())
+            logger.info(f"[PAPER {reason}] {pos.symbol} {pos.direction} exit={exit_price:.2f} pnl=${pos.realised_pnl:.4f}")
+
+
+paper_engine = PaperEngine()

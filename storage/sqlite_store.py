@@ -253,4 +253,100 @@ class SQLiteStore:
                 """, (limit,))
             return [dict(r) for r in cur.fetchall()]
 
+    def init_paper_tables(self):
+        """Create paper trading tables (idempotent, called at engine startup)."""
+        with self._get_connection() as conn:
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS crypto_paper_positions (
+                position_id       TEXT PRIMARY KEY,
+                symbol            TEXT NOT NULL,
+                direction         TEXT NOT NULL,
+                notional_usdt     REAL NOT NULL,
+                leverage          INTEGER NOT NULL,
+                entry_price       REAL NOT NULL,
+                entry_slippage_bps REAL NOT NULL,
+                entry_fee_usdt    REAL NOT NULL,
+                margin_usdt       REAL NOT NULL,
+                mark_price        REAL NOT NULL DEFAULT 0,
+                unrealised_pnl    REAL NOT NULL DEFAULT 0,
+                funding_paid_usdt REAL NOT NULL DEFAULT 0,
+                total_fees_usdt   REAL NOT NULL DEFAULT 0,
+                exit_price        REAL,
+                exit_slippage_bps REAL,
+                exit_fee_usdt     REAL,
+                realised_pnl      REAL,
+                exit_reason       TEXT,
+                status            TEXT NOT NULL DEFAULT 'OPEN',
+                stop_loss_price   REAL,
+                take_profit_price REAL,
+                opened_at_ms      INTEGER NOT NULL,
+                closed_at_ms      INTEGER,
+                last_funding_at_ms INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_paper_pos_symbol_status
+            ON crypto_paper_positions (symbol, status, opened_at_ms DESC);
+            """)
+            conn.commit()
+
+    def upsert_paper_position(self, p: dict):
+        with self._get_connection() as conn:
+            conn.execute("""
+            INSERT INTO crypto_paper_positions (
+                position_id, symbol, direction, notional_usdt, leverage,
+                entry_price, entry_slippage_bps, entry_fee_usdt, margin_usdt,
+                mark_price, unrealised_pnl, funding_paid_usdt, total_fees_usdt,
+                exit_price, exit_slippage_bps, exit_fee_usdt, realised_pnl,
+                exit_reason, status, stop_loss_price, take_profit_price,
+                opened_at_ms, closed_at_ms, last_funding_at_ms
+            ) VALUES (
+                :position_id, :symbol, :direction, :notional_usdt, :leverage,
+                :entry_price, :entry_slippage_bps, :entry_fee_usdt, :margin_usdt,
+                :mark_price, :unrealised_pnl, :funding_paid_usdt, :total_fees_usdt,
+                :exit_price, :exit_slippage_bps, :exit_fee_usdt, :realised_pnl,
+                :exit_reason, :status, :stop_loss_price, :take_profit_price,
+                :opened_at_ms, :closed_at_ms, :last_funding_at_ms
+            )
+            ON CONFLICT(position_id) DO UPDATE SET
+                mark_price         = excluded.mark_price,
+                unrealised_pnl     = excluded.unrealised_pnl,
+                funding_paid_usdt  = excluded.funding_paid_usdt,
+                total_fees_usdt    = excluded.total_fees_usdt,
+                exit_price         = excluded.exit_price,
+                exit_slippage_bps  = excluded.exit_slippage_bps,
+                exit_fee_usdt      = excluded.exit_fee_usdt,
+                realised_pnl       = excluded.realised_pnl,
+                exit_reason        = excluded.exit_reason,
+                status             = excluded.status,
+                closed_at_ms       = excluded.closed_at_ms,
+                last_funding_at_ms = excluded.last_funding_at_ms
+            """, p)
+            conn.commit()
+
+    def get_paper_positions(
+        self,
+        symbol: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[dict]:
+        with self._get_connection() as conn:
+            clauses = []
+            params: list = []
+            if symbol:
+                clauses.append("symbol = ?")
+                params.append(symbol.upper())
+            if status:
+                clauses.append("status = ?")
+                params.append(status.upper())
+            where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+            params.append(limit)
+            cur = conn.execute(
+                f"SELECT * FROM crypto_paper_positions {where} "
+                f"ORDER BY opened_at_ms DESC LIMIT ?",
+                params,
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
 sqlite_store = SQLiteStore()
+

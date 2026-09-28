@@ -6,12 +6,14 @@ Exposes endpoints for Market Pilot React UI and external monitoring.
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
+from pydantic import BaseModel
 from config.settings import settings
 from collectors.binance_ws import collector
 from collectors.derivatives import derivatives_engine
 from core.contracts import CandidateRecord
 from storage.sqlite_store import sqlite_store
 from core.clock import now_utc_iso
+from paper.paper_engine import paper_engine
 
 app = FastAPI(
     title="Market Pilot Crypto Research API",
@@ -114,3 +116,71 @@ def record_candidate(record: CandidateRecord):
     sqlite_store.insert_candidate(record)
     return {"status": "RECORDED", "candidate_id": record.candidate_id}
 
+
+# ── Paper Trading Endpoints ────────────────────────────────────────────────
+
+class OpenPositionRequest(BaseModel):
+    symbol: str = "BTCUSDT"
+    direction: str              # "LONG" or "SHORT"
+    notional_usdt: float        # Size in USDT (e.g. 500)
+    leverage: int = 5
+    stop_loss_price: Optional[float] = None
+    take_profit_price: Optional[float] = None
+
+
+@app.post("/paper/positions")
+async def open_paper_position(req: OpenPositionRequest):
+    """Open a new realistic paper position with orderbook-walk slippage."""
+    result = await paper_engine.open_position(
+        symbol=req.symbol,
+        direction=req.direction,
+        notional_usdt=req.notional_usdt,
+        leverage=req.leverage,
+        stop_loss_price=req.stop_loss_price,
+        take_profit_price=req.take_profit_price,
+        orderbooks=collector.orderbooks,
+    )
+    if "error" in result:
+        raise HTTPException(status_code=503, detail=result["error"])
+    return result
+
+
+@app.get("/paper/positions")
+def get_paper_positions(
+    symbol: Optional[str] = Query(None),
+    status: Optional[str] = Query(None, description="OPEN | CLOSED | LIQUIDATED"),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Returns paper positions from database (persisted across restarts)."""
+    return {
+        "positions": sqlite_store.get_paper_positions(symbol, status, limit),
+        "summary": paper_engine.get_summary(),
+    }
+
+
+@app.get("/paper/positions/live")
+def get_live_paper_positions(symbol: Optional[str] = Query(None)):
+    """Returns live in-memory open positions with real-time unrealised PnL."""
+    return {
+        "positions": paper_engine.get_positions(symbol, status="OPEN"),
+        "summary": paper_engine.get_summary(),
+    }
+
+
+@app.post("/paper/positions/{position_id}/close")
+async def close_paper_position(position_id: str, reason: str = Query("MANUAL")):
+    """Manually close an open paper position with realistic exit slippage."""
+    result = await paper_engine.close_position(
+        position_id=position_id,
+        reason=reason,
+        orderbooks=collector.orderbooks,
+    )
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@app.get("/paper/summary")
+def get_paper_summary():
+    """Returns aggregate P&L, fees, funding drag and capital utilisation."""
+    return paper_engine.get_summary()
