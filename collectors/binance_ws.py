@@ -127,6 +127,17 @@ class BinanceStreamCollector:
                 update_id = payload.get("u", 0)
                 event_time_ms = payload.get("E", received_ms)
                 self.orderbooks[symbol].apply_snapshot(bids, asks, update_id)
+                if symbol in self.feed_statuses:
+                    self.feed_statuses[symbol].mark_event(event_time_ms, received_ms)
+                    sqlite_store.update_feed_status(self.feed_statuses[symbol])
+
+        # 4. Mark Price & Funding stream
+        elif "@markPrice" in stream_name:
+            symbol = payload.get("s", "").upper()
+            if symbol in self.feed_statuses:
+                event_time_ms = payload.get("E", received_ms)
+                self.feed_statuses[symbol].mark_event(event_time_ms, received_ms)
+                sqlite_store.update_feed_status(self.feed_statuses[symbol])
 
     async def _flush_periodically(self):
         """Flushes buffered trades to Parquet every 30 seconds."""

@@ -18,8 +18,8 @@ class Settings(BaseModel):
     API_PORT: int = 8800
     
     # Binance Feeds
-    BINANCE_SPOT_WS: str = "wss://stream.binance.com:9443/ws"
-    BINANCE_FUTURES_WS: str = "wss://fstream.binance.com/ws"
+    BINANCE_SPOT_WS: str = "wss://stream.binance.com:9443"
+    BINANCE_FUTURES_WS: str = "wss://fstream.binance.com"
     BINANCE_SPOT_REST: str = "https://api.binance.com"
     BINANCE_FUTURES_REST: str = "https://fapi.binance.com"
     
