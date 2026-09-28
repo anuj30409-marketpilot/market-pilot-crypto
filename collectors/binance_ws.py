@@ -56,88 +56,91 @@ class BinanceStreamCollector:
         # Global liquidation stream
         streams.append("!forceOrder@arr")
         stream_path = "/".join(streams)
-        return f"{settings.BINANCE_FUTURES_WS}/stream?streams={stream_path}"
+        return f"{settings.BINANCE_FUTURES_WS}/market/stream?streams={stream_path}"
 
     async def _handle_message(self, raw_bytes: bytes):
-        received_ms = now_utc_ms()
-        data = orjson.loads(raw_bytes)
-        stream_name = data.get("stream", "")
-        payload = data.get("data", {})
+        try:
+            received_ms = now_utc_ms()
+            data = orjson.loads(raw_bytes)
+            stream_name = data.get("stream", "")
+            payload = data.get("data", {})
 
-        if not payload:
-            return
+            if not payload:
+                return
 
-        # 1. Kline stream
-        if "@kline_1m" in stream_name:
-            k = payload.get("k", {})
-            symbol = payload.get("s", "").upper()
-            event_time_ms = payload.get("E", received_ms)
-            
-            candle = Candle1m(
-                symbol=symbol,
-                market_type="FUTURES",
-                open_time_ms=k.get("t"),
-                close_time_ms=k.get("T"),
-                open=float(k.get("o")),
-                high=float(k.get("h")),
-                low=float(k.get("l")),
-                close=float(k.get("c")),
-                volume=float(k.get("v")),
-                quote_volume=float(k.get("q")),
-                trades_count=int(k.get("n")),
-                taker_buy_base_volume=float(k.get("V")),
-                taker_buy_quote_volume=float(k.get("Q")),
-                event_time_ms=event_time_ms,
-                received_at_ms=received_ms,
-                is_closed=bool(k.get("x"))
-            )
-            # Store completed candles or update latest bar in SQLite
-            sqlite_store.upsert_candle(candle)
-            
-            if symbol in self.feed_statuses:
-                self.feed_statuses[symbol].mark_event(event_time_ms, received_ms)
-                sqlite_store.update_feed_status(self.feed_statuses[symbol])
-
-        # 2. Aggregated Trade stream
-        elif "@aggTrade" in stream_name:
-            trade = AggTrade(
-                symbol=payload.get("s", "").upper(),
-                market_type="FUTURES",
-                trade_id=payload.get("a"),
-                price=float(payload.get("p")),
-                quantity=float(payload.get("q")),
-                is_buyer_maker=bool(payload.get("m")),
-                event_time_ms=payload.get("E", received_ms),
-                received_at_ms=received_ms
-            )
-            async with self.trade_batch_lock:
-                self.trade_batch.append(trade)
-                if len(self.trade_batch) >= 200:
-                    batch_to_write = list(self.trade_batch)
-                    self.trade_batch.clear()
-                    # Non-blocking parquet write offloaded to executor
-                    asyncio.get_running_loop().run_in_executor(None, parquet_store.write_agg_trades_batch, batch_to_write)
-
-        # 3. Depth snapshot / diff
-        elif "@depth" in stream_name:
-            symbol = payload.get("s", "").upper()
-            if symbol in self.orderbooks:
-                bids = payload.get("b", [])
-                asks = payload.get("a", [])
-                update_id = payload.get("u", 0)
+            # 1. Kline stream
+            if "@kline_1m" in stream_name:
+                k = payload.get("k", {})
+                symbol = (payload.get("s") or k.get("s") or "").upper()
                 event_time_ms = payload.get("E", received_ms)
-                self.orderbooks[symbol].apply_snapshot(bids, asks, update_id)
+                
+                candle = Candle1m(
+                    symbol=symbol,
+                    market_type="FUTURES",
+                    open_time_ms=k.get("t"),
+                    close_time_ms=k.get("T"),
+                    open=float(k.get("o")),
+                    high=float(k.get("h")),
+                    low=float(k.get("l")),
+                    close=float(k.get("c")),
+                    volume=float(k.get("v")),
+                    quote_volume=float(k.get("q")),
+                    trades_count=int(k.get("n")),
+                    taker_buy_base_volume=float(k.get("V")),
+                    taker_buy_quote_volume=float(k.get("Q")),
+                    event_time_ms=event_time_ms,
+                    received_at_ms=received_ms,
+                    is_closed=bool(k.get("x"))
+                )
+                # Store completed candles or update latest bar in SQLite
+                sqlite_store.upsert_candle(candle)
+                
                 if symbol in self.feed_statuses:
                     self.feed_statuses[symbol].mark_event(event_time_ms, received_ms)
                     sqlite_store.update_feed_status(self.feed_statuses[symbol])
 
-        # 4. Mark Price & Funding stream
-        elif "@markPrice" in stream_name:
-            symbol = payload.get("s", "").upper()
-            if symbol in self.feed_statuses:
-                event_time_ms = payload.get("E", received_ms)
-                self.feed_statuses[symbol].mark_event(event_time_ms, received_ms)
-                sqlite_store.update_feed_status(self.feed_statuses[symbol])
+            # 2. Aggregated Trade stream
+            elif "@aggTrade" in stream_name:
+                trade = AggTrade(
+                    symbol=(payload.get("s") or "").upper(),
+                    market_type="FUTURES",
+                    trade_id=payload.get("a"),
+                    price=float(payload.get("p")),
+                    quantity=float(payload.get("q")),
+                    is_buyer_maker=bool(payload.get("m")),
+                    event_time_ms=payload.get("E", received_ms),
+                    received_at_ms=received_ms
+                )
+                async with self.trade_batch_lock:
+                    self.trade_batch.append(trade)
+                    if len(self.trade_batch) >= 200:
+                        batch_to_write = list(self.trade_batch)
+                        self.trade_batch.clear()
+                        # Non-blocking parquet write offloaded to executor
+                        asyncio.get_running_loop().run_in_executor(None, parquet_store.write_agg_trades_batch, batch_to_write)
+
+            # 3. Depth snapshot / diff
+            elif "@depth" in stream_name:
+                symbol = (payload.get("s") or "").upper()
+                if symbol in self.orderbooks:
+                    bids = payload.get("b", [])
+                    asks = payload.get("a", [])
+                    update_id = payload.get("u", 0)
+                    event_time_ms = payload.get("E", received_ms)
+                    self.orderbooks[symbol].apply_snapshot(bids, asks, update_id)
+                    if symbol in self.feed_statuses:
+                        self.feed_statuses[symbol].mark_event(event_time_ms, received_ms)
+                        sqlite_store.update_feed_status(self.feed_statuses[symbol])
+
+            # 4. Mark Price & Funding stream
+            elif "@markPrice" in stream_name:
+                symbol = (payload.get("s") or "").upper()
+                if symbol in self.feed_statuses:
+                    event_time_ms = payload.get("E", received_ms)
+                    self.feed_statuses[symbol].mark_event(event_time_ms, received_ms)
+                    sqlite_store.update_feed_status(self.feed_statuses[symbol])
+        except Exception as e:
+            logger.error(f"Error handling message: {e}")
 
     async def _flush_periodically(self):
         """Flushes buffered trades to Parquet every 30 seconds."""
