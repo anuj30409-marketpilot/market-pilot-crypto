@@ -252,9 +252,9 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
         ema_slow = _ema(closes, EMA_SLOW)
         dc_high, dc_low = _donchian(highs, lows, DONCHIAN_PERIOD)
         adx_val = _adx(highs, lows, closes, ADX_PERIOD)
-        vol_sma = _sma(volumes[:-1], DONCHIAN_PERIOD)
-        current_vol = volumes[-1] if volumes else 0.0
-        vol_ratio = (current_vol / vol_sma) if vol_sma and vol_sma > 0 else 0.0
+        vol_sma = _sma(volumes[-21:-1] if len(volumes) >= 22 else volumes[:-1], DONCHIAN_PERIOD)
+        eval_vol = max(volumes[-1], volumes[-2]) if len(volumes) >= 2 else (volumes[-1] if volumes else 0.0)
+        vol_ratio = (eval_vol / vol_sma) if vol_sma and vol_sma > 0 else 0.0
         current_close = closes[-1] if closes else ob.mid_price
 
         trend_bull = (ema_fast is not None and ema_slow is not None and ema_fast > ema_slow)

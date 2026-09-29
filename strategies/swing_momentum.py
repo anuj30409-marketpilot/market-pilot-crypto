@@ -179,9 +179,10 @@ def evaluate_swing_momentum(
         dc_high, dc_low = _donchian(highs, lows, DONCHIAN_PERIOD)
 
         # 6. Volume expansion check
-        vol_sma = _sma(volumes[:-1], DONCHIAN_PERIOD)   # SMA of last 20 completed bars
-        current_vol = volumes[-1] if volumes else 0.0
-        vol_ratio = (current_vol / vol_sma) if vol_sma and vol_sma > 0 else 0.0
+        # Use max of latest completed bar and current in-progress bar so evaluation timing within minute doesn't penalize
+        vol_sma = _sma(volumes[-21:-1] if len(volumes) >= 22 else volumes[:-1], DONCHIAN_PERIOD)
+        eval_vol = max(volumes[-1], volumes[-2]) if len(volumes) >= 2 else (volumes[-1] if volumes else 0.0)
+        vol_ratio = (eval_vol / vol_sma) if vol_sma and vol_sma > 0 else 0.0
 
         # 7. ADX directional strength
         adx_val = _adx(highs, lows, closes, ADX_PERIOD)
@@ -249,7 +250,7 @@ def evaluate_swing_momentum(
     signal_score = min(100.0, max(0.0, (expected_edge_bps / 60.0) * 100.0)) if is_accepted else 0.0
 
     # Runtime currency (required by CandidateRecord)
-    from services.currency import currency_service
+    from config.currency import currency_service
     return CandidateRecord(
         candidate_id=candidate_id,
         timestamp_ms=now_ms,
