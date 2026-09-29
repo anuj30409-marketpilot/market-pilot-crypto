@@ -129,7 +129,7 @@ class StrategyEvaluator:
                 if accepted:
                     logger.info("Evaluator cycle: %d candidates evaluated, %d ACCEPTED!", len(records), len(accepted))
                 else:
-                    logger.debug("Evaluator cycle: %d candidates evaluated, 0 accepted.", len(records))
+                    logger.info("Evaluator cycle: %d candidates evaluated, 0 accepted (negative proofs recorded).", len(records))
             except Exception as e:
                 logger.error("Error in StrategyEvaluator loop: %s", e, exc_info=True)
             await asyncio.sleep(60.0)

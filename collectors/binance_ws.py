@@ -67,15 +67,16 @@ class BinanceStreamCollector:
             received_ms = now_utc_ms()
             data = orjson.loads(raw_bytes)
             stream_name = data.get("stream", "")
+            stream_lower = stream_name.lower()
             payload = data.get("data", {})
 
             if not payload:
                 return
 
             # 1. Kline stream
-            if "@kline_1m" in stream_name:
+            if "@kline" in stream_lower:
                 k = payload.get("k", {})
-                symbol = (payload.get("s") or k.get("s") or "").upper()
+                symbol = (payload.get("s") or k.get("s") or (stream_name.split("@")[0] if "@" in stream_name else "")).upper()
                 event_time_ms = payload.get("E", received_ms)
                 
                 candle = Candle1m(
@@ -108,9 +109,9 @@ class BinanceStreamCollector:
                     sqlite_store.update_feed_status(self.feed_statuses[symbol])
 
             # 2. Aggregated Trade stream
-            elif "@aggTrade" in stream_name:
+            elif "@aggtrade" in stream_lower:
                 trade = AggTrade(
-                    symbol=(payload.get("s") or "").upper(),
+                    symbol=(payload.get("s") or (stream_name.split("@")[0] if "@" in stream_name else "")).upper(),
                     market_type="FUTURES",
                     trade_id=payload.get("a"),
                     price=float(payload.get("p")),
@@ -128,7 +129,7 @@ class BinanceStreamCollector:
                         asyncio.get_running_loop().run_in_executor(None, parquet_store.write_agg_trades_batch, batch_to_write)
 
             # 3. Depth snapshot / diff
-            elif "@depth" in stream_name:
+            elif "@depth" in stream_lower:
                 symbol = (payload.get("s") or (stream_name.split("@")[0] if "@" in stream_name else "")).upper()
                 if symbol in self.orderbooks:
                     bids = payload.get("b", [])
@@ -141,13 +142,23 @@ class BinanceStreamCollector:
                         sqlite_store.update_feed_status(self.feed_statuses[symbol])
 
             # 4. Mark Price & Funding stream
-            elif "@markPrice" in stream_name:
+            elif "@markprice" in stream_lower:
                 symbol = (payload.get("s") or (stream_name.split("@")[0] if "@" in stream_name else "")).upper()
                 derivatives_engine.handle_mark_price_message(symbol, payload)
                 if symbol in self.feed_statuses:
                     event_time_ms = payload.get("E", received_ms)
                     self.feed_statuses[symbol].mark_event(event_time_ms, received_ms)
                     sqlite_store.update_feed_status(self.feed_statuses[symbol])
+
+            # 5. Global Liquidation Stream (!forceOrder@arr)
+            elif "forceorder" in stream_lower:
+                order_data = payload.get("o", {})
+                symbol = (order_data.get("s") or "").upper()
+                price = float(order_data.get("p", 0.0))
+                qty = float(order_data.get("q", 0.0))
+                notional = price * qty
+                if symbol in derivatives_engine.trackers and notional > 0:
+                    derivatives_engine.trackers[symbol].record_liquidation(notional)
         except Exception as e:
             logger.error(f"Error handling message: {e}")
 
