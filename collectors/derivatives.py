@@ -62,7 +62,11 @@ class SymbolDerivativesTracker:
         taker_buy = c.taker_buy_base_volume
         taker_sell = max(0.0, total_vol - taker_buy)
         self.cvd_1m = taker_buy - taker_sell
-        mark = self.mark_price or c.close
+        if self.mark_price == 0.0:
+            self.mark_price = c.close
+        if self.index_price == 0.0:
+            self.index_price = c.close
+        mark = self.mark_price
         self.cvd_notional_usd_1m = self.cvd_1m * mark
         self.recent_cvd_notionals.append(self.cvd_notional_usd_1m)
         if len(self.recent_cvd_notionals) > 60:
@@ -204,23 +208,52 @@ class DerivativesEngine:
             logger.warning(f"Failed to fetch OI for {symbol}: {e}")
         return 0.0
 
+    async def fetch_premium_index(self, symbol: str) -> dict:
+        """Polls Binance Futures REST for Mark Price, Index Price, and Funding Rate."""
+        try:
+            url = f"{settings.BINANCE_FUTURES_REST}/fapi/v1/premiumIndex?symbol={symbol}"
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    mark = float(data.get("markPrice", 0.0))
+                    index = float(data.get("indexPrice", 0.0))
+                    funding = float(data.get("lastFundingRate", 0.0))
+                    next_funding = int(data.get("nextFundingTime", 0))
+                    upper = symbol.upper()
+                    if upper in self.trackers and mark > 0:
+                        self.trackers[upper].update_mark_price(mark, index, funding, next_funding)
+                    return data
+        except Exception as e:
+            logger.warning(f"Failed to fetch premiumIndex for {symbol}: {e}")
+        return {}
+
     async def run_oi_poller(self):
-        """Polls Open Interest every 30 seconds for configured futures symbols."""
+        """Polls Open Interest and Premium Index every 30 seconds for configured futures symbols."""
+        # Initial immediate fetch on startup
+        for symbol, tracker in self.trackers.items():
+            await self.fetch_premium_index(symbol)
+            oi = await self.fetch_open_interest(symbol)
+            if oi > 0:
+                tracker.open_interest = oi
+                tracker.last_oi_fetch_ms = now_utc_ms()
+
         while True:
+            await asyncio.sleep(30)
             for symbol, tracker in self.trackers.items():
+                await self.fetch_premium_index(symbol)
                 oi = await self.fetch_open_interest(symbol)
                 if oi > 0:
                     tracker.open_interest = oi
                     tracker.last_oi_fetch_ms = now_utc_ms()
-            await asyncio.sleep(30)
 
     def handle_mark_price_message(self, symbol: str, payload: dict):
         upper = symbol.upper()
         if upper in self.trackers:
-            mark = float(payload.get("p", 0.0))
-            index = float(payload.get("i", 0.0))
-            funding = float(payload.get("r", 0.0))
-            next_funding = int(payload.get("T", 0))
+            mark = float(payload.get("p", payload.get("markPrice", 0.0)))
+            index = float(payload.get("P", payload.get("i", payload.get("indexPrice", 0.0))))
+            funding = float(payload.get("r", payload.get("lastFundingRate", 0.0)))
+            next_funding = int(payload.get("T", payload.get("nextFundingTime", 0)))
             self.trackers[upper].update_mark_price(mark, index, funding, next_funding)
 
     def handle_candle_update(self, candle: Candle1m, quarantine_state: str = "NORMAL"):
