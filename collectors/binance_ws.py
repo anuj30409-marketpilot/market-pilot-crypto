@@ -54,11 +54,11 @@ class BinanceStreamCollector:
         for sym in settings.SYMBOLS_FUTURES:
             s = sym.lower()
             streams.append(f"{s}@kline_1m")
-            streams.append(f"{s}@aggTrade")
+            streams.append(f"{s}@aggtrade")
             streams.append(f"{s}@depth20@100ms")
-            streams.append(f"{s}@markPrice@1s")
+            streams.append(f"{s}@markprice@1s")
         # Global liquidation stream
-        streams.append("!forceOrder@arr")
+        streams.append("!forceorder@arr")
         stream_path = "/".join(streams)
         return f"{settings.BINANCE_FUTURES_WS}/stream?streams={stream_path}"
 
