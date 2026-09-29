@@ -55,28 +55,29 @@ def evaluate_orderbook_momentum(
     if ob.bid_depth_5 <= 0.0 or ob.ask_depth_5 <= 0.0:
         rejection_codes.append("REJECT_LOW_LIQUIDITY")
 
-    # Directional Momentum Signals
-    is_long = (
-        ob.imbalance_5 >= 0.40 and
-        deriv.cvd_notional_usd_zscore >= 2.0 and
-        deriv.taker_buy_ratio_1m >= 0.65
-    )
+    # Directional Momentum Signals — Dual-Pathway Logic
+    # Pathway A (Flow-Driven): Strong CVD impulse + taker aggressor dominance.
+    #   Imbalance allowed to be temporarily neutral (aggressors thin bid depth during buying).
+    flow_long  = (deriv.cvd_notional_usd_zscore >= 1.30 and deriv.taker_buy_ratio_1m >= 0.58 and ob.imbalance_5 >= -0.10)
+    flow_short = (deriv.cvd_notional_usd_zscore <= -1.30 and deriv.taker_buy_ratio_1m <= 0.42 and ob.imbalance_5 <= 0.10)
 
-    is_short = (
-        ob.imbalance_5 <= -0.40 and
-        deriv.cvd_notional_usd_zscore <= -2.0 and
-        deriv.taker_buy_ratio_1m <= 0.35
-    )
+    # Pathway B (Queue-Driven): Deep book skew + microprice edge with mild CVD confirmation.
+    queue_long  = (ob.imbalance_5 >= 0.30 and ob.microprice_edge_bps >= 0.8 and deriv.cvd_notional_usd_zscore >= 0.50)
+    queue_short = (ob.imbalance_5 <= -0.30 and ob.microprice_edge_bps <= -0.8 and deriv.cvd_notional_usd_zscore <= -0.50)
+
+    is_long  = flow_long  or queue_long
+    is_short = flow_short or queue_short
 
     direction = "LONG" if is_long else ("SHORT" if is_short else None)
 
     if not direction:
         rejection_codes.append("REJECT_SIGNAL_THRESHOLD_NOT_MET")
 
-    # Edge vs Execution Friction (5-15 min drift typically 15-30 bps for >40% book depth imbalance)
+    # Edge vs Execution Friction — incorporates both pathways
     abs_imb = abs(ob.imbalance_5)
     abs_cvd_z = abs(deriv.cvd_notional_usd_zscore)
-    expected_edge_bps = (abs_imb * 16.0) + (abs_cvd_z * 4.0)
+    abs_micro = abs(ob.microprice_edge_bps) if ob.microprice_edge_bps else 0.0
+    expected_edge_bps = (abs_imb * 14.0) + (abs_cvd_z * 3.5) + (abs_micro * 2.0)
 
     estimated_cost_bps = ob.spread_bps + (taker_fee_bps * 2.0) + slippage_reserve_bps
     expected_net_edge_bps = expected_edge_bps - estimated_cost_bps

@@ -66,6 +66,18 @@ STRATEGY_PROFILES = {
         "max_hold_ms": 90 * 60 * 1000,  # 90 minutes
         "leverage": 5,
     },
+    "STRAT_SWING_MOMENTUM_V1": {
+        "sl_pct": 0.75,
+        "tp_pct": 1.50,
+        "max_hold_ms": 4 * 3600 * 1000,  # 4 hours
+        "leverage": 5,
+    },
+    "STRAT_SUPERHUMAN_SWING_V1": {
+        "sl_pct": 0.75,
+        "tp_pct": 1.50,
+        "max_hold_ms": 4 * 3600 * 1000,  # 4 hours
+        "leverage": 5,
+    },
 }
 
 
@@ -213,6 +225,12 @@ class PaperDispatcher:
             if "LONG" in reason or "CASCADE_DOWN" in reason or "DUMP" in reason:
                 return "LONG"  # Fading a dump
             return "SHORT"
+
+        # S4/SH4: Swing Momentum — direction is explicit in the decision reason
+        if "SWING" in strat:
+            if "SHORT" in reason:
+                return "SHORT"
+            return "LONG"
 
         return "LONG"
 

@@ -19,6 +19,7 @@ from collectors.derivatives import derivatives_engine
 from strategies.funding_reversion import evaluate_funding_reversion, STRATEGY_ID as S1_ID
 from strategies.orderbook_momentum import evaluate_orderbook_momentum, STRATEGY_ID as S2_ID
 from strategies.liquidation_fader import evaluate_liquidation_fader, STRATEGY_ID as S3_ID
+from strategies.swing_momentum import evaluate_swing_momentum, STRATEGY_ID as S4_ID
 
 logger = logging.getLogger("crypto_evaluator")
 
@@ -73,10 +74,25 @@ class StrategyEvaluator:
             approved_by="MANAGING_PARTNER",
             research_commit_hash="HEAD"
         )
+        s4 = StrategyDefinition(
+            strategy_id=S4_ID,
+            strategy_name="Intraday Trend & Swing Momentum Breakout",
+            version="1.0.0",
+            hypothesis="EMA-aligned Donchian breakout with volume expansion and ADX confirmation captures multi-hour swings.",
+            feature_version="1.0",
+            parameter_version="1.0",
+            entry_rules={"ema_fast": 20, "ema_slow": 50, "donchian": 20, "adx_min": 22.0, "vol_ratio_min": 1.25},
+            exit_rules={"tp_pct": 1.50, "sl_pct": 0.75, "max_hold_hours": 4},
+            risk_profile={"max_risk_pct": 0.25, "leverage": 5},
+            status=StrategyStatus.PAPER_ACTIVE,
+            approved_by="MANAGING_PARTNER",
+            research_commit_hash="HEAD"
+        )
         self.registry.register_strategy(s1)
         self.registry.register_strategy(s2)
         self.registry.register_strategy(s3)
-        logger.info("Bootstrap complete: Strategies S1, S2, and S3 initialized in Strategy Registry.")
+        self.registry.register_strategy(s4)
+        logger.info("Bootstrap complete: Strategies S1, S2, S3, S4 initialized in Strategy Registry.")
 
     async def evaluate_once(self) -> List[CandidateRecord]:
         """Runs a single evaluation sweep across all tracked symbols and strategies."""
@@ -105,12 +121,16 @@ class StrategyEvaluator:
                 logger.warning("Symbol %s has no deriv state (mark=%s, last_candle=%s)", upper, getattr(tracker, 'mark_price', None), getattr(tracker, 'last_candle_time_ms', None))
                 continue
 
-            # Evaluate Strategy 1, 2, 3
+            # Get tracker for S4 raw list access (recent_closes, highs, lows, volumes)
+            tracker = derivatives_engine.trackers.get(upper)
+
+            # Evaluate Strategy 1, 2, 3, 4
             cand1 = evaluate_funding_reversion(deriv, ob)
             cand2 = evaluate_orderbook_momentum(deriv, ob)
             cand3 = evaluate_liquidation_fader(deriv, ob)
+            cand4 = evaluate_swing_momentum(deriv, ob, tracker)
 
-            for cand in [cand1, cand2, cand3]:
+            for cand in [cand1, cand2, cand3, cand4]:
                 sqlite_store.insert_candidate(cand)
                 records.append(cand)
                 if cand.decision == "ACCEPT":

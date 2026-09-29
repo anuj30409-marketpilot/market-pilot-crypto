@@ -29,6 +29,7 @@ logger = logging.getLogger("superhuman_evaluator")
 SH1_ID = "STRAT_SUPERHUMAN_MACRO_REGIME_V1"
 SH2_ID = "STRAT_SUPERHUMAN_CROSS_VENUE_V1"
 SH3_ID = "STRAT_SUPERHUMAN_VOLATILITY_EXPANSION_V1"
+SH4_ID = "STRAT_SUPERHUMAN_SWING_V1"
 
 
 def evaluate_superhuman_macro_regime(deriv: DerivativesState, ob: OrderbookSnapshot) -> CandidateRecord:
@@ -41,15 +42,22 @@ def evaluate_superhuman_macro_regime(deriv: DerivativesState, ob: OrderbookSnaps
     cvd_z = deriv.cvd_notional_usd_zscore
     regime = deriv.regime
 
-    # Thesis: Regime must be trending or high volatility, or strong CVD impulse
-    if regime not in ["TRENDING_UP", "TRENDING_DOWN", "HIGH_VOLATILITY"]:
+    # Thesis: Trending/high-volatility regimes are ideal, but RANGE with strong CVD impulse
+    # (>= 1.60σ) signals early breakout — regime lags price by definition.
+    HARD_REGIMES = {"TRENDING_UP", "TRENDING_DOWN", "HIGH_VOLATILITY"}
+    in_hard_regime = regime in HARD_REGIMES
+    range_breakout  = (regime == "RANGE" and abs(cvd_z) >= 1.60)
+
+    if not (in_hard_regime or range_breakout):
         rejections.append("REJECT_REGIME_UNFAVORABLE")
 
-    if abs(cvd_z) < 2.5:
+    # CVD impulse threshold lowered: 2.5σ was a 1-in-160 event per 60s snapshot.
+    # 1.6σ captures the leading edge of a breakout while remaining above ~94th percentile.
+    if abs(cvd_z) < 1.60:
         rejections.append("REJECT_SIGNAL_THRESHOLD_NOT_MET")
 
     # Edge calculation
-    expected_edge_bps = abs(cvd_z) * 6.0  # e.g. 2.5 * 6 = 15 bps
+    expected_edge_bps = abs(cvd_z) * 6.0  # e.g. 1.6 * 6 = 9.6 bps
     expected_net_edge_bps = expected_edge_bps - friction_bps
 
     if expected_net_edge_bps < 3.0:
@@ -197,6 +205,155 @@ def evaluate_superhuman_vol_expansion(deriv: DerivativesState, ob: OrderbookSnap
     )
 
 
+def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tracker) -> CandidateRecord:
+    """SH4: Superhuman Intraday Swing — Contextual multi-TF confirmation with OI & book integrity.
+
+    Thesis:
+    Confirms S4 Quant swing breakout with Superhuman-layer checks:
+    - OI must be expanding (delta_OI > 0): real buyers/sellers opening positions, not just speculation.
+    - No counter-trend book trap: book skew (bid-dominated against a short signal) must not exceed 0.35.
+    - CVD must confirm breakout direction (z-score >= 0.80).
+    - Multi-timeframe: EMA_20 > EMA_50 (bull) or < EMA_50 (bear) on 1m candle data.
+    origin="SUPERHUMAN", desk="SUPERHUMAN"
+    """
+    from strategies.swing_momentum import (
+        _ema, _donchian, _adx,
+        EMA_FAST, EMA_SLOW, DONCHIAN_PERIOD, ADX_PERIOD,
+        VOLUME_RATIO_MIN, _sma,
+    )
+
+    now_ms = now_utc_ms()
+    cand_id = f"CAND-SH4-{deriv.symbol}-{now_ms}"
+    rejections = []
+
+    spread_bps = ob.spread_bps
+    friction_bps = 8.0 + spread_bps + 2.0
+    regime = deriv.regime
+    cvd_z = deriv.cvd_notional_usd_zscore
+
+    # 1. Data feed health
+    if deriv.quarantine_state != "NORMAL":
+        rejections.append("REJECT_DATA_STALE")
+
+    # 2. Pull raw lists
+    closes  = list(getattr(tracker, "recent_closes",  []) or [])
+    highs   = list(getattr(tracker, "recent_highs",   []) or [])
+    lows    = list(getattr(tracker, "recent_lows",    []) or [])
+    volumes = list(getattr(tracker, "recent_volumes", []) or [])
+
+    MIN_BARS = EMA_SLOW + ADX_PERIOD + 5
+    if len(closes) < MIN_BARS:
+        rejections.append("REJECT_INSUFFICIENT_DATA")
+        direction = None
+        adx_val = None
+        expected_edge_bps = 0.0
+    else:
+        ema_fast = _ema(closes, EMA_FAST)
+        ema_slow = _ema(closes, EMA_SLOW)
+        dc_high, dc_low = _donchian(highs, lows, DONCHIAN_PERIOD)
+        adx_val = _adx(highs, lows, closes, ADX_PERIOD)
+        vol_sma = _sma(volumes[:-1], DONCHIAN_PERIOD)
+        current_vol = volumes[-1] if volumes else 0.0
+        vol_ratio = (current_vol / vol_sma) if vol_sma and vol_sma > 0 else 0.0
+        current_close = closes[-1] if closes else ob.mid_price
+
+        trend_bull = (ema_fast is not None and ema_slow is not None and ema_fast > ema_slow)
+        trend_bear = (ema_fast is not None and ema_slow is not None and ema_fast < ema_slow)
+        broke_dc_high = (dc_high is not None and current_close > dc_high)
+        broke_dc_low  = (dc_low  is not None and current_close < dc_low)
+
+        long_setup  = trend_bull and broke_dc_high
+        short_setup = trend_bear and broke_dc_low
+
+        vol_ok = vol_ratio >= VOLUME_RATIO_MIN
+        adx_ok = adx_val is not None and adx_val >= 22.0
+
+        if not (long_setup or short_setup):
+            rejections.append("REJECT_SIGNAL_THRESHOLD_NOT_MET")
+            direction = None
+        elif not vol_ok:
+            rejections.append("REJECT_LOW_VOLUME_EXPANSION")
+            direction = None
+        elif not adx_ok:
+            rejections.append("REJECT_LOW_ADX_STRENGTH")
+            direction = None
+        else:
+            direction = "LONG" if long_setup else "SHORT"
+
+        # 3. Superhuman Layer — OI expansion check
+        delta_oi = getattr(deriv, "oi_change_pct_1h", None) or getattr(deriv, "open_interest_delta", None) or 0.0
+        if direction is not None and delta_oi <= 0.0:
+            rejections.append("REJECT_OI_NOT_EXPANDING")
+            direction = None
+
+        # 4. Book trap filter: reject if counter-trend depth skew > 0.35
+        if direction == "LONG" and ob.imbalance_5 < -0.35:
+            rejections.append("REJECT_COUNTER_TREND_BOOK_TRAP")
+            direction = None
+        elif direction == "SHORT" and ob.imbalance_5 > 0.35:
+            rejections.append("REJECT_COUNTER_TREND_BOOK_TRAP")
+            direction = None
+
+        # 5. CVD direction confirmation
+        if direction == "LONG"  and cvd_z < 0.80:
+            rejections.append("REJECT_CVD_DIRECTION_MISMATCH")
+            direction = None
+        elif direction == "SHORT" and cvd_z > -0.80:
+            rejections.append("REJECT_CVD_DIRECTION_MISMATCH")
+            direction = None
+
+        # 6. Edge
+        adx_factor = (adx_val / 22.0) if adx_val else 1.0
+        expected_edge_bps = 55.0 * adx_factor if direction else 0.0
+
+    friction_bps_total = friction_bps
+    expected_net_edge_bps = expected_edge_bps - friction_bps_total
+
+    if direction is not None and expected_net_edge_bps < 5.0:
+        rejections.append("REJECT_EDGE_TOO_SMALL")
+        direction = None
+        expected_edge_bps = 0.0
+        expected_net_edge_bps = -friction_bps_total
+
+    decision = "ACCEPT" if not rejections else "REJECT"
+    if decision == "ACCEPT":
+        decision_reason = (
+            f"SH4 {direction} swing: ADX={adx_val:.1f}, CVD_z={cvd_z:.2f}, "
+            f"net_edge={expected_net_edge_bps:.1f} bps, OI expanding"
+        )
+        hypothetical_entry = ob.best_ask if direction == "LONG" else ob.best_bid
+    else:
+        decision_reason = f"Rejected: {', '.join(rejections)}"
+        hypothetical_entry = ob.mid_price
+
+    return CandidateRecord(
+        candidate_id=cand_id,
+        timestamp_ms=now_ms,
+        symbol=deriv.symbol,
+        origin="SUPERHUMAN",
+        engine_version="v2.0-SH4",
+        model_version="deepseek-r1-swing-v1",
+        signal_version="v1.0",
+        decision=decision,
+        decision_reason=decision_reason,
+        hypothetical_entry=hypothetical_entry,
+        strategy_id=SH4_ID,
+        strategy_version="1.0.0",
+        feature_version="1.0",
+        parameter_version="1.0",
+        signal_score=min(100.0, max(0.0, (expected_edge_bps / 60.0) * 100.0)) if decision == "ACCEPT" else 0.0,
+        expected_edge_bps=expected_edge_bps,
+        estimated_cost_bps=friction_bps_total,
+        expected_net_edge_bps=expected_net_edge_bps,
+        regime=regime,
+        rejection_codes=rejections,
+        conversion_rate_applied=currency_service.get_rate("MARKET"),
+        research_venue="BINANCE",
+        execution_venue="DELTA_INDIA",
+        created_at_iso=ms_to_iso(now_ms),
+    )
+
+
 class SuperhumanEvaluator:
     """Continuous evaluation runner for Superhuman AI strategies."""
 
@@ -248,10 +405,25 @@ class SuperhumanEvaluator:
             approved_by="MANAGING_PARTNER",
             research_commit_hash="HEAD"
         )
+        sh4 = StrategyDefinition(
+            strategy_id=SH4_ID,
+            strategy_name="Superhuman Intraday Swing Momentum",
+            version="1.0.0",
+            hypothesis="Multi-TF EMA/Donchian breakout with OI expansion, book integrity, and CVD direction confirmation.",
+            feature_version="1.0",
+            parameter_version="1.0",
+            entry_rules={"ema_fast": 20, "ema_slow": 50, "donchian": 20, "adx_min": 22.0, "vol_ratio_min": 1.25, "cvd_z_min": 0.80},
+            exit_rules={"tp_pct": 1.50, "sl_pct": 0.75, "max_hold_hours": 4},
+            risk_profile={"max_risk_pct": 0.25, "leverage": 5},
+            status=StrategyStatus.PAPER_ACTIVE,
+            approved_by="MANAGING_PARTNER",
+            research_commit_hash="HEAD"
+        )
         self.registry.register_strategy(sh1)
         self.registry.register_strategy(sh2)
         self.registry.register_strategy(sh3)
-        logger.info("Superhuman strategies SH1, SH2, SH3 registered.")
+        self.registry.register_strategy(sh4)
+        logger.info("Superhuman strategies SH1, SH2, SH3, SH4 registered.")
 
     async def evaluate_once(self) -> List[CandidateRecord]:
         records: List[CandidateRecord] = []
@@ -269,11 +441,14 @@ class SuperhumanEvaluator:
             if not deriv:
                 continue
 
+            tracker = derivatives_engine.trackers.get(upper)
+
             c1 = evaluate_superhuman_macro_regime(deriv, ob)
             c2 = evaluate_superhuman_cross_venue(deriv, ob)
             c3 = evaluate_superhuman_vol_expansion(deriv, ob)
+            c4 = evaluate_superhuman_swing(deriv, ob, tracker)
 
-            for cand in [c1, c2, c3]:
+            for cand in [c1, c2, c3, c4]:
                 sqlite_store.insert_candidate(cand)
                 records.append(cand)
                 if cand.decision == "ACCEPT":
