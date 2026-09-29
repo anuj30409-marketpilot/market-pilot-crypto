@@ -44,13 +44,13 @@ echo "All test suites passed cleanly."
 # 5. Restart systemd daemon service
 echo "[5/6] Restarting ${SERVICE_NAME}..."
 sudo systemctl restart "${SERVICE_NAME}"
-sleep 2
+sleep 5
 
 # 6. Verify service health and API endpoints
 echo "[6/6] Verifying service status and health..."
 sudo systemctl status "${SERVICE_NAME}" --no-pager -l
 
-HEALTH_CHECK=$(curl -s http://127.0.0.1:8800/currency || echo "FAIL")
+HEALTH_CHECK=$(curl --retry 5 --retry-delay 1 --retry-connrefused -s http://127.0.0.1:8800/currency || echo "FAIL")
 if [ "${HEALTH_CHECK}" != "FAIL" ]; then
     echo "API Health Check: PASS -> ${HEALTH_CHECK}"
 else

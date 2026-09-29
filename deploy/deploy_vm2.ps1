@@ -26,10 +26,10 @@ git pull origin main && \
 .venv/bin/python scripts/test_phase4_dispatcher.py && \
 .venv/bin/python scripts/test_phase5_control.py && \
 sudo systemctl restart crypto-pilot.service && \
-sleep 2 && \
+sleep 5 && \
 sudo systemctl status crypto-pilot.service --no-pager -l && \
-curl -s http://127.0.0.1:8800/currency && echo '' && \
-curl -s http://127.0.0.1:8800/regime && echo ''
+curl --retry 5 --retry-delay 1 --retry-connrefused -s http://127.0.0.1:8800/currency && echo '' && \
+curl --retry 3 --retry-delay 1 --retry-connrefused -s http://127.0.0.1:8800/regime && echo ''
 "@
 
 ssh -i $SSH_KEY -o StrictHostKeyChecking=no "$USER@$VM2_IP" $COMMANDS
