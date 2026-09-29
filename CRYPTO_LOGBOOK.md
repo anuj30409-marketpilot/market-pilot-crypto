@@ -61,3 +61,11 @@
 - **Change (local, NOT deployed):** `strategies/superhuman_evaluator.py` `evaluate_once` no longer evaluates or records SH2; loop list is now `[c1, c3, c4]`. Function definition left intact for future re-enable. Paper-only, fully reversible. Registry status left as-is (evaluation skip is the effective park; avoids an unnecessary governance transition).
 - **Effect:** Superhuman cycle log drops from "8 evaluated" to "6 evaluated"; the dead-candidate stream stops growing.
 - **Re-enable condition:** when `execution/parity.py` receives a live Delta India feed (i.e. something calls `update_delta_price`).
+
+### 2026-09-29: ORDERBOOK_MOMENTUM evidence review — the '59 net-positive vs 0 accepted' puzzle dissolved
+- **What was claimed (my own earlier framing):** STRAT_ORDERBOOK_MOMENTUM_V1 had 59 net-positive-edge rows yet 0 accepted — an apparent contradiction.
+- **What the data actually shows:** Of the net-positive-edge rows, 7 were ACCEPT (all synthetic TEST-DISPATCH) and 53 were REJECT. The 53 rejects break down as: 28 `[REGIME_UNFAVORABLE, SIGNAL_THRESHOLD_NOT_MET, EDGE_TOO_SMALL]` and 25 `[REGIME_UNFAVORABLE, SIGNAL_THRESHOLD_NOT_MET]`. **Not one was rejected by an edge failure alone.**
+- **Root insight (from orderbook_momentum.py:76-89):** `expected_edge_bps` is computed UNCONDITIONALLY from magnitudes — `abs(imbalance_5)*14 + abs(cvd_z)*3.5 + abs(microprice)*2` — so it measures *book activity magnitude*, NOT trade validity. Acceptance separately requires a direction to align across 4 conjunctive conditions (flow_long/short OR queue_long/short). A high edge value with no direction = an active but unaligned book. **There is no contradiction; the two metrics measure different things.**
+- **Why the regime gate fires so often:** ALLOWED_REGIMES for this strategy = {TRENDING_UP, TRENDING_DOWN, RANGE, HIGH_VOLATILITY}. The market has been in LOW_VOLATILITY (3286/4360 candidates). So ORDERBOOK_MOMENTUM is *correctly regime-gated out* of the prevailing market — by design, not by fault.
+- **Conclusion:** No strategy change warranted. The desk's largest-edge QUANT strategy simply does not trade in a low-volatility regime, which is what its own rules say. Do NOT relax ALLOWED_REGIMES to force trades (FM-1).
+- **Correction logged:** my earlier 'contradiction' framing is retracted; recorded here so it is not re-chased.
