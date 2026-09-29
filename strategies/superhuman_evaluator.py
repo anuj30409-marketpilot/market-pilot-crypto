@@ -445,11 +445,15 @@ class SuperhumanEvaluator:
             tracker = derivatives_engine.trackers.get(upper)
 
             c1 = evaluate_superhuman_macro_regime(deriv, ob)
-            c2 = evaluate_superhuman_cross_venue(deriv, ob)
+            # SH2 (CROSS_VENUE) PARKED 2026-09-29 - requires a live Delta India venue feed
+            # that is not wired: parity_engine.delta_prices is never populated, so
+            # evaluate_parity always returns PARITY_DELTA_FEED_DISCONNECTED. See
+            # CRYPTO_LOGBOOK.md FM-3. Re-enable when execution/parity.py has a Delta feed.
+            # c2 = evaluate_superhuman_cross_venue(deriv, ob)
             c3 = evaluate_superhuman_vol_expansion(deriv, ob)
             c4 = evaluate_superhuman_swing(deriv, ob, tracker)
 
-            for cand in [c1, c2, c3, c4]:
+            for cand in [c1, c3, c4]:
                 sqlite_store.insert_candidate(cand)
                 records.append(cand)
                 if cand.decision == "ACCEPT":
