@@ -18,16 +18,7 @@ if (-not (Test-Path $SSH_KEY)) {
 }
 
 $COMMANDS = @"
-cd /home/ubuntu/market-pilot && \
-git fetch origin feature/options-shadow-broker && \
-git checkout feature/options-shadow-broker && \
-git pull origin feature/options-shadow-broker && \
-cd frontend && \
-npm run build && \
-sudo cp -r dist/* /var/www/market-pilot/ && \
-sudo nginx -t && \
-sudo systemctl reload nginx && \
-curl -s -I https://marketpilotanuj.duckdns.org/v3/crypto | head -n 5
+sudo DEPLOY_BRANCH='feature/options-shadow-broker' bash /home/ubuntu/market-pilot-git/deploy/oracle/deploy-git.sh
 "@
 
 ssh -i $SSH_KEY -o StrictHostKeyChecking=no "$USER@$VM1_HOST" $COMMANDS
