@@ -60,7 +60,7 @@ class BinanceStreamCollector:
         # Global liquidation stream
         streams.append("!forceOrder@arr")
         stream_path = "/".join(streams)
-        return f"{settings.BINANCE_FUTURES_WS}/market/stream?streams={stream_path}"
+        return f"{settings.BINANCE_FUTURES_WS}/stream?streams={stream_path}"
 
     async def _handle_message(self, raw_bytes: bytes):
         try:
