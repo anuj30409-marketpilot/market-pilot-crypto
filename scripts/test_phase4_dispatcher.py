@@ -120,10 +120,9 @@ async def run_phase4_tests():
     print(f"      Position opened: ID={pos_id[:8]}... Price=${pos_data['entry_price']:.2f} Slippage={pos_data['entry_slippage_bps']:.2f}bps")
 
     # Verify candidate record in DB was updated with actual entry
-    updated_candidates = sqlite_store.get_candidates(symbol="BTCUSDT", limit=5)
-    matched = [c for c in updated_candidates if c["candidate_id"] == cand_id]
-    assert len(matched) == 1, "Candidate record missing from DB"
-    assert matched[0]["actual_paper_entry"] == pos_data["entry_price"], "Candidate actual entry not synced!"
+    cand_record = sqlite_store.get_candidate_by_id(cand_id)
+    assert cand_record is not None, "Candidate record missing from DB"
+    assert cand_record["actual_paper_entry"] == pos_data["entry_price"], "Candidate actual entry not synced!"
     print("      [OK] Candidate ledger sync verified.")
 
     # 4. Test Strategy Lifecycle & Position Exit Sync
@@ -138,10 +137,10 @@ async def run_phase4_tests():
     print(f"      Position closed: Exit=${close_res['exit_price']:.2f}, Realised PnL=${close_res['realised_pnl']:.4f}")
 
     # Verify candidate record in DB was updated with exit price and PnL
-    updated_candidates = sqlite_store.get_candidates(symbol="BTCUSDT", limit=5)
-    matched = [c for c in updated_candidates if c["candidate_id"] == cand_id]
-    assert matched[0]["actual_paper_exit"] == close_res["exit_price"]
-    assert matched[0]["actual_pnl"] == close_res["realised_pnl"]
+    cand_record_after_close = sqlite_store.get_candidate_by_id(cand_id)
+    assert cand_record_after_close is not None
+    assert cand_record_after_close["actual_paper_exit"] == close_res["exit_price"]
+    assert cand_record_after_close["actual_pnl"] == close_res["realised_pnl"]
     print("      [OK] Candidate ledger exit and PnL reconciliation verified.")
 
     print("=" * 60)

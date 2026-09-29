@@ -196,8 +196,7 @@ def test_candidate_provenance_and_rejection_codes():
     )
     sqlite_store.insert_candidate(rec)
     
-    candidates = sqlite_store.get_candidates("BTCUSDT", limit=5)
-    found = next((c for c in candidates if c["candidate_id"] == "CAND-TEST-001"), None)
+    found = sqlite_store.get_candidate_by_id("CAND-TEST-001")
     assert found is not None, "Inserted candidate not found in SQLite"
     assert found["strategy_id"] == "STRAT-CVD-02"
     assert found["decision"] == "REJECT"

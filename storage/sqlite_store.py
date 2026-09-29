@@ -371,6 +371,13 @@ class SQLiteStore:
                 """, (limit,))
             return [dict(r) for r in cur.fetchall()]
 
+    def get_candidate_by_id(self, candidate_id: str) -> Optional[dict]:
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM crypto_candidate_ledger WHERE candidate_id = ?", (candidate_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+
     def init_paper_tables(self):
         """Create paper trading tables (idempotent, called at engine startup)."""
         with self._get_connection() as conn:
