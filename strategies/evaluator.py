@@ -87,6 +87,7 @@ class StrategyEvaluator:
             
             # Fetch orderbook snapshot
             if upper not in collector.orderbooks:
+                logger.warning("Symbol %s not in collector.orderbooks", upper)
                 continue
             try:
                 ob = collector.orderbooks[upper].get_snapshot()
@@ -96,9 +97,12 @@ class StrategyEvaluator:
 
             # Fetch derivatives state
             if upper not in derivatives_engine.trackers:
+                logger.warning("Symbol %s not in derivatives_engine.trackers", upper)
                 continue
             deriv = derivatives_engine.trackers[upper].get_state()
             if not deriv:
+                tracker = derivatives_engine.trackers.get(upper)
+                logger.warning("Symbol %s has no deriv state (mark=%s, last_candle=%s)", upper, getattr(tracker, 'mark_price', None), getattr(tracker, 'last_candle_time_ms', None))
                 continue
 
             # Evaluate Strategy 1
