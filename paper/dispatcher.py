@@ -48,6 +48,24 @@ STRATEGY_PROFILES = {
         "max_hold_ms": 60 * 60 * 1000,  # 60 minutes
         "leverage": 5,
     },
+    "STRAT_SUPERHUMAN_MACRO_REGIME_V1": {
+        "sl_pct": 0.60,
+        "tp_pct": 1.50,
+        "max_hold_ms": 120 * 60 * 1000,  # 2 hours
+        "leverage": 5,
+    },
+    "STRAT_SUPERHUMAN_CROSS_VENUE_V1": {
+        "sl_pct": 0.40,
+        "tp_pct": 0.80,
+        "max_hold_ms": 45 * 60 * 1000,  # 45 minutes
+        "leverage": 5,
+    },
+    "STRAT_SUPERHUMAN_VOLATILITY_EXPANSION_V1": {
+        "sl_pct": 0.70,
+        "tp_pct": 2.00,
+        "max_hold_ms": 90 * 60 * 1000,  # 90 minutes
+        "leverage": 5,
+    },
 }
 
 
@@ -211,11 +229,14 @@ class PaperDispatcher:
         symbol = candidate.symbol.upper()
         strat_id = candidate.strategy_id
 
-        # 1. Fetch current portfolio state
-        summary = paper_engine.get_summary()
+        # Determine desk: QUANT or SUPERHUMAN
+        desk = "SUPERHUMAN" if getattr(candidate, "origin", "QUANT").upper() == "SUPERHUMAN" else "QUANT"
+
+        # 1. Fetch current portfolio state for this specific desk
+        summary = paper_engine.get_summary(desk=desk)
         account_equity = summary["capital_usdt"] + summary["net_pnl"]
-        open_positions = sqlite_store.get_paper_positions(status="OPEN")
-        closed_positions = sqlite_store.get_paper_positions(status="CLOSED", limit=50)
+        open_positions = sqlite_store.get_paper_positions(status="OPEN", desk=desk)
+        closed_positions = sqlite_store.get_paper_positions(status="CLOSED", desk=desk, limit=50)
 
         # 2. Get live orderbook
         if symbol not in orderbooks:
@@ -264,8 +285,8 @@ class PaperDispatcher:
 
         # 6. Execute Order on Paper Desk
         logger.info(
-            "Dispatching ACCEPTED candidate %s (%s) %s %s: notional=$%.2f, risk_loss=$%.2f (%.2f%% eq)",
-            candidate.candidate_id, strat_id, symbol, direction, notional_usdt, risk_loss_usd, DEFAULT_RISK_PER_TRADE_PCT
+            "Dispatching ACCEPTED candidate %s (%s) %s %s [%s Desk]: notional=$%.2f, risk_loss=$%.2f (%.2f%% eq)",
+            candidate.candidate_id, strat_id, symbol, direction, desk, notional_usdt, risk_loss_usd, DEFAULT_RISK_PER_TRADE_PCT
         )
 
         exec_result = await paper_engine.open_position(
@@ -284,6 +305,7 @@ class PaperDispatcher:
             max_hold_ms=max_hold_ms,
             risk_loss_usd=risk_loss_usd,
             stop_loss_distance_usd=sl_distance_usd,
+            desk=desk,
         )
 
         if "error" in exec_result:

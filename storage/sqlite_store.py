@@ -182,6 +182,7 @@ class SQLiteStore:
             self._add_column_if_missing(conn, "crypto_paper_positions", "max_hold_ms", "INTEGER")
             self._add_column_if_missing(conn, "crypto_paper_positions", "risk_loss_usd", "REAL DEFAULT 0.0")
             self._add_column_if_missing(conn, "crypto_paper_positions", "stop_loss_distance_usd", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_paper_positions", "desk", "TEXT DEFAULT 'QUANT'")
 
             conn.commit()
 
@@ -406,11 +407,15 @@ class SQLiteStore:
                 regime            TEXT DEFAULT 'RANGE',
                 max_hold_ms       INTEGER,
                 risk_loss_usd     REAL DEFAULT 0.0,
-                stop_loss_distance_usd REAL DEFAULT 0.0
+                stop_loss_distance_usd REAL DEFAULT 0.0,
+                desk              TEXT NOT NULL DEFAULT 'QUANT'
             );
 
             CREATE INDEX IF NOT EXISTS idx_paper_pos_symbol_status
             ON crypto_paper_positions (symbol, status, opened_at_ms DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_paper_pos_desk
+            ON crypto_paper_positions (desk, status, opened_at_ms DESC);
             """)
             conn.commit()
 
@@ -424,6 +429,7 @@ class SQLiteStore:
         payload.setdefault("max_hold_ms", None)
         payload.setdefault("risk_loss_usd", 0.0)
         payload.setdefault("stop_loss_distance_usd", 0.0)
+        payload.setdefault("desk", "QUANT")
 
         with self._get_connection() as conn:
             conn.execute("""
@@ -435,7 +441,8 @@ class SQLiteStore:
                 exit_reason, status, stop_loss_price, take_profit_price,
                 opened_at_ms, closed_at_ms, last_funding_at_ms,
                 strategy_id, candidate_id, signal_score, expected_edge_bps,
-                regime, max_hold_ms, risk_loss_usd, stop_loss_distance_usd
+                regime, max_hold_ms, risk_loss_usd, stop_loss_distance_usd,
+                desk
             ) VALUES (
                 :position_id, :symbol, :direction, :notional_usdt, :leverage,
                 :entry_price, :entry_slippage_bps, :entry_fee_usdt, :margin_usdt,
@@ -444,7 +451,8 @@ class SQLiteStore:
                 :exit_reason, :status, :stop_loss_price, :take_profit_price,
                 :opened_at_ms, :closed_at_ms, :last_funding_at_ms,
                 :strategy_id, :candidate_id, :signal_score, :expected_edge_bps,
-                :regime, :max_hold_ms, :risk_loss_usd, :stop_loss_distance_usd
+                :regime, :max_hold_ms, :risk_loss_usd, :stop_loss_distance_usd,
+                :desk
             )
             ON CONFLICT(position_id) DO UPDATE SET
                 mark_price         = excluded.mark_price,
@@ -458,7 +466,8 @@ class SQLiteStore:
                 exit_reason        = excluded.exit_reason,
                 status             = excluded.status,
                 closed_at_ms       = excluded.closed_at_ms,
-                last_funding_at_ms = excluded.last_funding_at_ms
+                last_funding_at_ms = excluded.last_funding_at_ms,
+                desk               = excluded.desk
             """, payload)
             conn.commit()
 
@@ -487,6 +496,7 @@ class SQLiteStore:
         self,
         symbol: Optional[str] = None,
         status: Optional[str] = None,
+        desk: Optional[str] = None,
         limit: int = 100,
     ) -> List[dict]:
         with self._get_connection() as conn:
@@ -498,6 +508,9 @@ class SQLiteStore:
             if status:
                 clauses.append("status = ?")
                 params.append(status.upper())
+            if desk and desk.upper() != "ALL":
+                clauses.append("desk = ?")
+                params.append(desk.upper())
             where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
             params.append(limit)
             cur = conn.execute(

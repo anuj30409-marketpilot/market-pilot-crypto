@@ -29,7 +29,9 @@ from storage.sqlite_store import sqlite_store
 logger = logging.getLogger("paper.engine")
 
 # Capital allocation per paper desk (USDT)
-PAPER_CAPITAL_USDT = 10_000.0
+QUANT_CAPITAL_USDT = 10_000.0
+SUPERHUMAN_CAPITAL_USDT = 10_000.0
+PAPER_CAPITAL_USDT = QUANT_CAPITAL_USDT  # Default backward compat
 
 # Default leverage (5x = 20% margin requirement)
 DEFAULT_LEVERAGE = 5
@@ -75,6 +77,7 @@ class PaperPosition:
     # Risk parameters set at open
     stop_loss_price: Optional[float] = None
     take_profit_price: Optional[float] = None
+    max_hold_ms: Optional[int] = None
 
     # Quantitative Alpha & Risk Controller Provenance
     strategy_id: str = "STRAT_UNKNOWN"
@@ -82,9 +85,9 @@ class PaperPosition:
     signal_score: float = 0.0
     expected_edge_bps: float = 0.0
     regime: str = "RANGE"
-    max_hold_ms: Optional[int] = None
     risk_loss_usd: float = 0.0
     stop_loss_distance_usd: float = 0.0
+    desk: str = "QUANT"  # "QUANT" or "SUPERHUMAN"
 
     def update_mark(self, mark: float):
         self.mark_price = mark
@@ -136,6 +139,7 @@ class PaperPosition:
             "max_hold_ms": self.max_hold_ms,
             "risk_loss_usd": self.risk_loss_usd,
             "stop_loss_distance_usd": self.stop_loss_distance_usd,
+            "desk": self.desk,
         }
 
 
@@ -167,6 +171,7 @@ class PaperEngine:
         max_hold_ms: Optional[int] = None,
         risk_loss_usd: float = 0.0,
         stop_loss_distance_usd: float = 0.0,
+        desk: str = "QUANT",
     ) -> dict:
         """Open a new paper position with realistic orderbook-walk fill."""
         symbol = symbol.upper()
@@ -200,6 +205,7 @@ class PaperEngine:
             max_hold_ms=max_hold_ms,
             risk_loss_usd=risk_loss_usd,
             stop_loss_distance_usd=stop_loss_distance_usd,
+            desk=desk.upper(),
         )
 
         async with self._lock:
@@ -269,35 +275,61 @@ class PaperEngine:
         )
         return pos.to_dict()
 
-    def get_positions(self, symbol: Optional[str] = None, status: str = "OPEN") -> List[dict]:
+    def get_positions(self, symbol: Optional[str] = None, status: str = "OPEN", desk: Optional[str] = None) -> List[dict]:
         positions = [
             p.to_dict() for p in self._positions.values()
-            if p.status == status and (symbol is None or p.symbol == symbol.upper())
+            if p.status == status
+            and (symbol is None or p.symbol == symbol.upper())
+            and (desk is None or desk.upper() == "ALL" or p.desk == desk.upper())
         ]
         return sorted(positions, key=lambda x: x["opened_at_ms"], reverse=True)
 
-    def get_summary(self) -> dict:
-        open_pos = [p for p in self._positions.values() if p.status == "OPEN"]
-        closed_pos = [p for p in self._positions.values() if p.status == "CLOSED"]
+    def _calc_summary(self, positions_list: List[PaperPosition], capital: float, desk_label: str) -> dict:
+        open_pos = [p for p in positions_list if p.status == "OPEN"]
+        closed_pos = [p for p in positions_list if p.status == "CLOSED"]
 
         total_unrealised = sum(p.unrealised_pnl for p in open_pos)
         total_realised = sum(p.realised_pnl or 0.0 for p in closed_pos)
-        total_fees = sum(p.total_fees_usdt for p in self._positions.values())
-        total_funding = sum(p.funding_paid_usdt for p in self._positions.values())
+        total_fees = sum(p.total_fees_usdt for p in positions_list)
+        total_funding = sum(p.funding_paid_usdt for p in positions_list)
         margin_used = sum(p.margin_usdt for p in open_pos)
+        wins = len([p for p in closed_pos if (p.realised_pnl or 0.0) > 0])
+        win_rate = (wins / len(closed_pos) * 100) if closed_pos else 0.0
 
         return {
-            "capital_usdt": PAPER_CAPITAL_USDT,
+            "desk": desk_label,
+            "capital_usdt": capital,
             "margin_used_usdt": round(margin_used, 4),
-            "margin_free_usdt": round(PAPER_CAPITAL_USDT - margin_used, 4),
+            "margin_free_usdt": round(capital - margin_used, 4),
             "open_positions": len(open_pos),
             "total_trades": len(closed_pos),
+            "win_rate_pct": round(win_rate, 2),
             "total_unrealised_pnl": round(total_unrealised, 4),
             "total_realised_pnl": round(total_realised, 4),
             "total_fees_paid_usdt": round(total_fees, 4),
             "total_funding_paid_usdt": round(total_funding, 4),
             "net_pnl": round(total_realised + total_unrealised, 4),
         }
+
+    def get_summary(self, desk: str = "ALL") -> dict:
+        all_positions = list(self._positions.values())
+        quant_positions = [p for p in all_positions if p.desk == "QUANT"]
+        superhuman_positions = [p for p in all_positions if p.desk == "SUPERHUMAN"]
+
+        quant_summary = self._calc_summary(quant_positions, QUANT_CAPITAL_USDT, "QUANT")
+        superhuman_summary = self._calc_summary(superhuman_positions, SUPERHUMAN_CAPITAL_USDT, "SUPERHUMAN")
+        combined_summary = self._calc_summary(all_positions, QUANT_CAPITAL_USDT + SUPERHUMAN_CAPITAL_USDT, "ALL")
+
+        if desk.upper() == "QUANT":
+            res = dict(quant_summary)
+        elif desk.upper() == "SUPERHUMAN":
+            res = dict(superhuman_summary)
+        else:
+            res = dict(combined_summary)
+
+        res["quant"] = quant_summary
+        res["superhuman"] = superhuman_summary
+        return res
 
     # ── Background loops ────────────────────────────────────────────────────
 

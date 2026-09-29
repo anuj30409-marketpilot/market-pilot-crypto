@@ -9,6 +9,7 @@ from collectors.binance_ws import collector
 from collectors.derivatives import derivatives_engine
 from paper.paper_engine import paper_engine
 from strategies.evaluator import strategy_evaluator
+from strategies.superhuman_evaluator import superhuman_evaluator
 from api.server import app
 from config.settings import settings
 import logging
@@ -31,7 +32,10 @@ async def run_services():
     # 5. Continuous Alpha Strategy Evaluator (evaluates S1, S2, S3 every 60s)
     evaluator_task = asyncio.create_task(strategy_evaluator.run_loop())
 
-    # 6. Configure Uvicorn server
+    # 6. Continuous Superhuman AI Strategy Evaluator (SH1, SH2, SH3 every 60s)
+    superhuman_task = asyncio.create_task(superhuman_evaluator.run_loop())
+
+    # 7. Configure Uvicorn server
     config = uvicorn.Config(
         app=app,
         host=settings.API_HOST,
@@ -52,6 +56,7 @@ async def run_services():
         paper_mark_task,
         paper_funding_task,
         evaluator_task,
+        superhuman_task,
     )
 
 if __name__ == "__main__":

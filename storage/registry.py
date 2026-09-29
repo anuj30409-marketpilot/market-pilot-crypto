@@ -179,3 +179,8 @@ class StrategyRegistry:
                     "SELECT * FROM crypto_strategy_registry WHERE status IN ('PAPER_ACTIVE', 'LIVE_SHADOW', 'LIVE_PILOT', 'LIVE_APPROVED')"
                 ).fetchall()
             return [dict(r) for r in rows]
+
+
+from storage.sqlite_store import sqlite_store
+strategy_registry = StrategyRegistry(sqlite_store)
+

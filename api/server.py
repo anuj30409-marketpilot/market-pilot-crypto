@@ -150,25 +150,36 @@ async def open_paper_position(req: OpenPositionRequest):
     return result
 
 
+@app.get("/capital-readiness")
+def get_capital_readiness():
+    """Returns real capital readiness flags for Strong Quant and Superhuman AI desks."""
+    from core.readiness import capital_readiness_service
+    return capital_readiness_service.get_readiness_report()
+
+
 @app.get("/paper/positions")
 def get_paper_positions(
     symbol: Optional[str] = Query(None),
     status: Optional[str] = Query(None, description="OPEN | CLOSED | LIQUIDATED"),
+    desk: Optional[str] = Query(None, description="QUANT | SUPERHUMAN | ALL"),
     limit: int = Query(50, ge=1, le=200),
 ):
     """Returns paper positions from database (persisted across restarts)."""
     return {
-        "positions": sqlite_store.get_paper_positions(symbol, status, limit),
-        "summary": paper_engine.get_summary(),
+        "positions": sqlite_store.get_paper_positions(symbol=symbol, status=status, desk=desk, limit=limit),
+        "summary": paper_engine.get_summary(desk=desk or "ALL"),
     }
 
 
 @app.get("/paper/positions/live")
-def get_live_paper_positions(symbol: Optional[str] = Query(None)):
+def get_live_paper_positions(
+    symbol: Optional[str] = Query(None),
+    desk: Optional[str] = Query(None, description="QUANT | SUPERHUMAN | ALL"),
+):
     """Returns live in-memory open positions with real-time unrealised PnL."""
     return {
-        "positions": paper_engine.get_positions(symbol, status="OPEN"),
-        "summary": paper_engine.get_summary(),
+        "positions": paper_engine.get_positions(symbol=symbol, status="OPEN", desk=desk),
+        "summary": paper_engine.get_summary(desk=desk or "ALL"),
     }
 
 
@@ -186,9 +197,9 @@ async def close_paper_position(position_id: str, reason: str = Query("MANUAL")):
 
 
 @app.get("/paper/summary")
-def get_paper_summary():
-    """Returns aggregate P&L, fees, funding drag and capital utilisation."""
-    return paper_engine.get_summary()
+def get_paper_summary(desk: str = Query("ALL", description="QUANT | SUPERHUMAN | ALL")):
+    """Returns aggregate P&L, fees, funding drag and capital utilisation for specified desk."""
+    return paper_engine.get_summary(desk=desk)
 
 
 # ── Strategy Registry & Governance Endpoints ───────────────────────────────
