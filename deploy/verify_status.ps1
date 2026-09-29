@@ -52,11 +52,22 @@ try:
     d = json.load(sys.stdin)
     q = d.get('quant', {})
     sh = d.get('superhuman', {})
-    print(f'  QUANT DESK:      Capital: \${q.get(\"capital_usdt\")} | Open Pos: {q.get(\"open_positions\")} | Trades: {q.get(\"total_trades\")} | WinRate: {q.get(\"win_rate_pct\")}% | Net PnL: \${q.get(\"net_pnl\")}')
-    print(f'  SUPERHUMAN DESK: Capital: \${sh.get(\"capital_usdt\")} | Open Pos: {sh.get(\"open_positions\")} | Trades: {sh.get(\"total_trades\")} | WinRate: {sh.get(\"win_rate_pct\")}% | Net PnL: \${sh.get(\"net_pnl\")}')
+    q_cap = q.get('capital_usdt')
+    q_pos = q.get('open_positions')
+    q_tr = q.get('total_trades')
+    q_wr = q.get('win_rate_pct')
+    q_pnl = q.get('net_pnl')
+    sh_cap = sh.get('capital_usdt')
+    sh_pos = sh.get('open_positions')
+    sh_tr = sh.get('total_trades')
+    sh_wr = sh.get('win_rate_pct')
+    sh_pnl = sh.get('net_pnl')
+    print(f'  QUANT DESK:      Capital: \${q_cap} | Open Pos: {q_pos} | Trades: {q_tr} | WinRate: {q_wr}% | Net PnL: \${q_pnl}')
+    print(f'  SUPERHUMAN DESK: Capital: \${sh_cap} | Open Pos: {sh_pos} | Trades: {sh_tr} | WinRate: {sh_wr}% | Net PnL: \${sh_pnl}')
 except Exception as e:
     print('Failed to parse paper summary:', e)
 "
 '@
 
-ssh -i $SSH_KEY -o StrictHostKeyChecking=no "$USER@$VM2_IP" $COMMANDS
+$COMMANDS | ssh -i $SSH_KEY -o StrictHostKeyChecking=no "$USER@$VM2_IP" "bash -s"
+
