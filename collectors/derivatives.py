@@ -27,6 +27,8 @@ class SymbolDerivativesTracker:
         self.funding_interval_hours: int = 8
         self.next_funding_time_ms: int = 0
         self.open_interest: float = 0.0
+        self.open_interest_delta: float = 0.0
+        self.oi_history: List[Tuple[int, float]] = []  # (timestamp_ms, oi)
         self.last_oi_fetch_ms: int = 0
         self.recent_funding_rates: List[float] = []  # For rolling z-score
         
@@ -45,6 +47,25 @@ class SymbolDerivativesTracker:
         self.recent_lows: List[float] = []
         self.recent_volumes: List[float] = []
 
+    def update_open_interest(self, oi: float, now_ms: int):
+        if self.open_interest > 0:
+            self.open_interest_delta = oi - self.open_interest
+        self.open_interest = oi
+        self.last_oi_fetch_ms = now_ms
+        self.oi_history.append((now_ms, oi))
+        # Keep rolling 1 hour of OI snapshots (120 snapshots at 30s interval)
+        if len(self.oi_history) > 120:
+            self.oi_history.pop(0)
+
+    def compute_oi_change_pct_1h(self) -> float:
+        if not self.oi_history or len(self.oi_history) < 2:
+            return 0.0
+        oldest_oi = self.oi_history[0][1]
+        current_oi = self.open_interest
+        if oldest_oi > 0:
+            return ((current_oi - oldest_oi) / oldest_oi) * 100.0
+        return 0.0
+
     def update_mark_price(self, mark: float, index: float, funding_rate: float, next_funding_time: int):
         self.mark_price = mark
         self.index_price = index
@@ -57,7 +78,11 @@ class SymbolDerivativesTracker:
                 self.recent_funding_rates.pop(0)
 
     def update_from_candle(self, c: Candle1m):
-        """Updates flow metrics from completed or current 1m bar."""
+        """Updates flow metrics from completed or current 1m bar.
+        
+        Ensures recent_closes/highs/lows/volumes store true 1-minute historical bars
+        rather than sub-second websocket tick snapshots.
+        """
         total_vol = c.volume
         taker_buy = c.taker_buy_base_volume
         taker_sell = max(0.0, total_vol - taker_buy)
@@ -68,17 +93,29 @@ class SymbolDerivativesTracker:
             self.index_price = c.close
         mark = self.mark_price
         self.cvd_notional_usd_1m = self.cvd_1m * mark
-        self.recent_cvd_notionals.append(self.cvd_notional_usd_1m)
-        if len(self.recent_cvd_notionals) > 60:
-            self.recent_cvd_notionals.pop(0)
 
         self.taker_buy_ratio_1m = (taker_buy / total_vol) if total_vol > 0 else 0.5
+
+        is_new_candle = (c.open_time_ms > self.last_candle_time_ms)
         self.last_candle_time_ms = c.open_time_ms
 
-        self.recent_closes.append(c.close)
-        self.recent_highs.append(c.high)
-        self.recent_lows.append(c.low)
-        self.recent_volumes.append(c.volume)
+        if is_new_candle or not self.recent_closes:
+            self.recent_cvd_notionals.append(self.cvd_notional_usd_1m)
+            self.recent_closes.append(c.close)
+            self.recent_highs.append(c.high)
+            self.recent_lows.append(c.low)
+            self.recent_volumes.append(c.volume)
+        else:
+            # Update the in-progress 1m candle bar
+            if self.recent_cvd_notionals:
+                self.recent_cvd_notionals[-1] = self.cvd_notional_usd_1m
+            self.recent_closes[-1] = c.close
+            self.recent_highs[-1] = max(self.recent_highs[-1], c.high)
+            self.recent_lows[-1] = min(self.recent_lows[-1], c.low)
+            self.recent_volumes[-1] = c.volume
+
+        if len(self.recent_cvd_notionals) > 60:
+            self.recent_cvd_notionals.pop(0)
         if len(self.recent_closes) > 200:
             self.recent_closes.pop(0)
             self.recent_highs.pop(0)
@@ -168,6 +205,8 @@ class SymbolDerivativesTracker:
             index_price=self.index_price,
             basis_bps=self.compute_basis_bps(),
             open_interest=self.open_interest,
+            open_interest_delta=self.open_interest_delta,
+            oi_change_pct_1h=self.compute_oi_change_pct_1h(),
             funding_rate=self.funding_rate,
             funding_interval_hours=self.funding_interval_hours,
             annualized_funding=annualized,
@@ -228,15 +267,40 @@ class DerivativesEngine:
             logger.warning(f"Failed to fetch premiumIndex for {symbol}: {e}")
         return {}
 
+    async def warmup_historical_candles(self, symbol: str):
+        """Fetches last 100 1m candles from Binance REST to warm up EMA, Donchian, ADX."""
+        try:
+            url = f"{settings.BINANCE_FUTURES_REST}/fapi/v1/klines?symbol={symbol}&interval=1m&limit=100"
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    bars = resp.json()
+                    tracker = self.trackers.get(symbol.upper())
+                    if tracker and bars:
+                        for b in bars:
+                            h = float(b[2])
+                            l = float(b[3])
+                            c = float(b[4])
+                            v = float(b[5])
+                            tracker.recent_closes.append(c)
+                            tracker.recent_highs.append(h)
+                            tracker.recent_lows.append(l)
+                            tracker.recent_volumes.append(v)
+                        tracker.last_candle_time_ms = int(bars[-1][0])
+                        tracker.mark_price = float(bars[-1][4])
+                        logger.info(f"Warmed up {len(bars)} 1m historical candles for {symbol}")
+        except Exception as e:
+            logger.warning(f"Failed to warmup historical candles for {symbol}: {e}")
+
     async def run_oi_poller(self):
         """Polls Open Interest and Premium Index every 30 seconds for configured futures symbols."""
-        # Initial immediate fetch on startup
+        # Initial immediate fetch and warmup on startup
         for symbol, tracker in self.trackers.items():
+            await self.warmup_historical_candles(symbol)
             await self.fetch_premium_index(symbol)
             oi = await self.fetch_open_interest(symbol)
             if oi > 0:
-                tracker.open_interest = oi
-                tracker.last_oi_fetch_ms = now_utc_ms()
+                tracker.update_open_interest(oi, now_utc_ms())
 
         while True:
             await asyncio.sleep(30)
@@ -244,8 +308,7 @@ class DerivativesEngine:
                 await self.fetch_premium_index(symbol)
                 oi = await self.fetch_open_interest(symbol)
                 if oi > 0:
-                    tracker.open_interest = oi
-                    tracker.last_oi_fetch_ms = now_utc_ms()
+                    tracker.update_open_interest(oi, now_utc_ms())
 
     def handle_mark_price_message(self, symbol: str, payload: dict):
         upper = symbol.upper()

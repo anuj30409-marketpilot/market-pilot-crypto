@@ -37,44 +37,44 @@ STRATEGY_PROFILES = {
         "leverage": 5,
     },
     "STRAT_ORDERBOOK_MOMENTUM_V1": {
-        "sl_pct": 0.40,
-        "tp_pct": 0.75,
+        "sl_pct": 0.60,
+        "tp_pct": 1.20,
         "max_hold_ms": 30 * 60 * 1000,  # 30 minutes
         "leverage": 5,
     },
     "STRAT_LIQUIDATION_FADER_V1": {
-        "sl_pct": 0.50,
-        "tp_pct": 1.00,
+        "sl_pct": 0.60,
+        "tp_pct": 1.20,
         "max_hold_ms": 60 * 60 * 1000,  # 60 minutes
         "leverage": 5,
     },
     "STRAT_SUPERHUMAN_MACRO_REGIME_V1": {
-        "sl_pct": 0.60,
-        "tp_pct": 1.50,
+        "sl_pct": 0.80,
+        "tp_pct": 1.60,
         "max_hold_ms": 120 * 60 * 1000,  # 2 hours
         "leverage": 5,
     },
     "STRAT_SUPERHUMAN_CROSS_VENUE_V1": {
-        "sl_pct": 0.40,
-        "tp_pct": 0.80,
+        "sl_pct": 0.50,
+        "tp_pct": 1.00,
         "max_hold_ms": 45 * 60 * 1000,  # 45 minutes
         "leverage": 5,
     },
     "STRAT_SUPERHUMAN_VOLATILITY_EXPANSION_V1": {
-        "sl_pct": 0.70,
+        "sl_pct": 0.80,
         "tp_pct": 2.00,
         "max_hold_ms": 90 * 60 * 1000,  # 90 minutes
         "leverage": 5,
     },
     "STRAT_SWING_MOMENTUM_V1": {
-        "sl_pct": 0.75,
-        "tp_pct": 1.50,
+        "sl_pct": 1.00,
+        "tp_pct": 2.00,
         "max_hold_ms": 4 * 3600 * 1000,  # 4 hours
         "leverage": 5,
     },
     "STRAT_SUPERHUMAN_SWING_V1": {
-        "sl_pct": 0.75,
-        "tp_pct": 1.50,
+        "sl_pct": 1.00,
+        "tp_pct": 2.00,
         "max_hold_ms": 4 * 3600 * 1000,  # 4 hours
         "leverage": 5,
     },

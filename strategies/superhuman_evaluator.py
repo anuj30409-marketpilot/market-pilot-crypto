@@ -56,11 +56,11 @@ def evaluate_superhuman_macro_regime(deriv: DerivativesState, ob: OrderbookSnaps
     if abs(cvd_z) < 1.60:
         rejections.append("REJECT_SIGNAL_THRESHOLD_NOT_MET")
 
-    # Edge calculation
-    expected_edge_bps = abs(cvd_z) * 6.0  # e.g. 1.6 * 6 = 9.6 bps
+    # Edge calculation: 1.6σ CVD yields ~13.6 bps gross edge; friction is ~10-11 bps
+    expected_edge_bps = abs(cvd_z) * 8.5  # e.g. 1.6 * 8.5 = 13.6 bps
     expected_net_edge_bps = expected_edge_bps - friction_bps
 
-    if expected_net_edge_bps < 3.0:
+    if expected_net_edge_bps < 1.5:
         rejections.append("REJECT_EDGE_TOO_SMALL")
 
     decision = "ACCEPT" if not rejections else "REJECT"
@@ -280,25 +280,26 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
         else:
             direction = "LONG" if long_setup else "SHORT"
 
-        # 3. Superhuman Layer — OI expansion check
-        delta_oi = getattr(deriv, "oi_change_pct_1h", None) or getattr(deriv, "open_interest_delta", None) or 0.0
-        if direction is not None and delta_oi <= 0.0:
-            rejections.append("REJECT_OI_NOT_EXPANDING")
+        # 3. Superhuman Layer — OI Contraction Trap Filter
+        # Reject only if open interest is experiencing severe capital flight / liquidation contraction (> -1.5% in 1h)
+        oi_pct_1h = getattr(deriv, "oi_change_pct_1h", 0.0)
+        if direction is not None and oi_pct_1h < -1.5:
+            rejections.append("REJECT_OI_CONTRACTION_UNWIND")
             direction = None
 
-        # 4. Book trap filter: reject if counter-trend depth skew > 0.35
-        if direction == "LONG" and ob.imbalance_5 < -0.35:
+        # 4. Book trap filter: reject if counter-trend depth skew > 0.40
+        if direction == "LONG" and ob.imbalance_5 < -0.40:
             rejections.append("REJECT_COUNTER_TREND_BOOK_TRAP")
             direction = None
-        elif direction == "SHORT" and ob.imbalance_5 > 0.35:
+        elif direction == "SHORT" and ob.imbalance_5 > 0.40:
             rejections.append("REJECT_COUNTER_TREND_BOOK_TRAP")
             direction = None
 
-        # 5. CVD direction confirmation
-        if direction == "LONG"  and cvd_z < 0.80:
+        # 5. CVD direction confirmation: gentle flow alignment (|z| >= 0.40)
+        if direction == "LONG"  and cvd_z < 0.40:
             rejections.append("REJECT_CVD_DIRECTION_MISMATCH")
             direction = None
-        elif direction == "SHORT" and cvd_z > -0.80:
+        elif direction == "SHORT" and cvd_z > -0.40:
             rejections.append("REJECT_CVD_DIRECTION_MISMATCH")
             direction = None
 
@@ -309,7 +310,7 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
     friction_bps_total = friction_bps
     expected_net_edge_bps = expected_edge_bps - friction_bps_total
 
-    if direction is not None and expected_net_edge_bps < 5.0:
+    if direction is not None and expected_net_edge_bps < 3.0:
         rejections.append("REJECT_EDGE_TOO_SMALL")
         direction = None
         expected_edge_bps = 0.0
@@ -319,7 +320,7 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
     if decision == "ACCEPT":
         decision_reason = (
             f"SH4 {direction} swing: ADX={adx_val:.1f}, CVD_z={cvd_z:.2f}, "
-            f"net_edge={expected_net_edge_bps:.1f} bps, OI expanding"
+            f"net_edge={expected_net_edge_bps:.1f} bps, book_imb={ob.imbalance_5:.2f}"
         )
         hypothetical_entry = ob.best_ask if direction == "LONG" else ob.best_bid
     else:

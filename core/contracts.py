@@ -80,6 +80,8 @@ class DerivativesState(BaseModel):
     liquidation_notional_60s: float = 0.0
     liquidation_intensity: float = 1.0
     liquidation_oi_impact: float = 0.0
+    open_interest_delta: float = 0.0
+    oi_change_pct_1h: float = 0.0
     regime: str = "RANGE"
     quarantine_state: str = "NORMAL"
     state_time_ms: int
