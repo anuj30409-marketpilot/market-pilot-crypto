@@ -76,6 +76,16 @@ class PaperPosition:
     stop_loss_price: Optional[float] = None
     take_profit_price: Optional[float] = None
 
+    # Quantitative Alpha & Risk Controller Provenance
+    strategy_id: str = "STRAT_UNKNOWN"
+    candidate_id: str = ""
+    signal_score: float = 0.0
+    expected_edge_bps: float = 0.0
+    regime: str = "RANGE"
+    max_hold_ms: Optional[int] = None
+    risk_loss_usd: float = 0.0
+    stop_loss_distance_usd: float = 0.0
+
     def update_mark(self, mark: float):
         self.mark_price = mark
         if self.direction == "LONG":
@@ -118,6 +128,14 @@ class PaperPosition:
             "last_funding_at_ms": self.last_funding_at_ms,
             "equity": self.equity(),
             "roe_pct": (self.unrealised_pnl / self.margin_usdt * 100) if self.margin_usdt else 0.0,
+            "strategy_id": self.strategy_id,
+            "candidate_id": self.candidate_id,
+            "signal_score": self.signal_score,
+            "expected_edge_bps": self.expected_edge_bps,
+            "regime": self.regime,
+            "max_hold_ms": self.max_hold_ms,
+            "risk_loss_usd": self.risk_loss_usd,
+            "stop_loss_distance_usd": self.stop_loss_distance_usd,
         }
 
 
@@ -141,6 +159,14 @@ class PaperEngine:
         stop_loss_price: Optional[float] = None,
         take_profit_price: Optional[float] = None,
         orderbooks: Optional[Dict[str, BoundedOrderbook]] = None,
+        strategy_id: str = "STRAT_UNKNOWN",
+        candidate_id: str = "",
+        signal_score: float = 0.0,
+        expected_edge_bps: float = 0.0,
+        regime: str = "RANGE",
+        max_hold_ms: Optional[int] = None,
+        risk_loss_usd: float = 0.0,
+        stop_loss_distance_usd: float = 0.0,
     ) -> dict:
         """Open a new paper position with realistic orderbook-walk fill."""
         symbol = symbol.upper()
@@ -166,14 +192,25 @@ class PaperEngine:
             total_fees_usdt=fill.fee_usdt,
             stop_loss_price=stop_loss_price,
             take_profit_price=take_profit_price,
+            strategy_id=strategy_id,
+            candidate_id=candidate_id,
+            signal_score=signal_score,
+            expected_edge_bps=expected_edge_bps,
+            regime=regime,
+            max_hold_ms=max_hold_ms,
+            risk_loss_usd=risk_loss_usd,
+            stop_loss_distance_usd=stop_loss_distance_usd,
         )
 
         async with self._lock:
             self._positions[pos.position_id] = pos
             sqlite_store.upsert_paper_position(pos.to_dict())
+            if candidate_id:
+                sqlite_store.update_candidate_paper_execution(candidate_id, entry_price=fill.avg_price)
 
         logger.info(
             f"[PAPER OPEN] {symbol} {direction} ${notional_usdt} "
+            f"strat={strategy_id} cand={candidate_id} "
             f"entry={fill.avg_price:.2f} slippage={fill.slippage_bps:.2f}bps "
             f"fee=${fill.fee_usdt:.4f}"
         )
@@ -218,6 +255,12 @@ class PaperEngine:
             pos.closed_at_ms = now_utc_ms()
 
             sqlite_store.upsert_paper_position(pos.to_dict())
+            if pos.candidate_id:
+                sqlite_store.update_candidate_paper_execution(
+                    candidate_id=pos.candidate_id,
+                    exit_price=exit_price,
+                    pnl=realised_pnl
+                )
 
         logger.info(
             f"[PAPER CLOSE] {pos.symbol} {pos.direction} reason={reason} "
@@ -364,6 +407,10 @@ class PaperEngine:
             elif pos.take_profit_price and mark <= pos.take_profit_price:
                 hit, reason, gap = True, "TAKE_PROFIT", False
 
+        # Time-stop check based on strategy lifecycle (e.g. 30m, 60m, 8h)
+        if not hit and pos.max_hold_ms and (now_utc_ms() - pos.opened_at_ms) >= pos.max_hold_ms:
+            hit, reason, gap = True, "TIME_STOP", False
+
         if hit:
             # Close inline — we're already under the lock
             exit_price = mark
@@ -382,6 +429,12 @@ class PaperEngine:
             pos.status = "CLOSED"
             pos.closed_at_ms = now_utc_ms()
             sqlite_store.upsert_paper_position(pos.to_dict())
+            if pos.candidate_id:
+                sqlite_store.update_candidate_paper_execution(
+                    candidate_id=pos.candidate_id,
+                    exit_price=exit_price,
+                    pnl=pos.realised_pnl
+                )
             logger.info(f"[PAPER {reason}] {pos.symbol} {pos.direction} exit={exit_price:.2f} pnl=${pos.realised_pnl:.4f}")
 
 

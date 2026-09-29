@@ -25,6 +25,9 @@ class SQLiteStore:
         return conn
 
     def _add_column_if_missing(self, conn: sqlite3.Connection, table: str, column: str, col_type: str):
+        table_check = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        if not table_check:
+            return
         cur = conn.execute(f"PRAGMA table_info({table})")
         cols = [r[1] for r in cur.fetchall()]
         if column not in cols:
@@ -169,6 +172,16 @@ class SQLiteStore:
             self._add_column_if_missing(conn, "crypto_candidate_ledger", "conversion_rate_applied", "REAL DEFAULT 89.50")
             self._add_column_if_missing(conn, "crypto_candidate_ledger", "research_venue", "TEXT DEFAULT 'BINANCE'")
             self._add_column_if_missing(conn, "crypto_candidate_ledger", "execution_venue", "TEXT DEFAULT 'DELTA_INDIA'")
+
+            # Run migrations for paper positions
+            self._add_column_if_missing(conn, "crypto_paper_positions", "strategy_id", "TEXT DEFAULT 'STRAT_UNKNOWN'")
+            self._add_column_if_missing(conn, "crypto_paper_positions", "candidate_id", "TEXT DEFAULT ''")
+            self._add_column_if_missing(conn, "crypto_paper_positions", "signal_score", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_paper_positions", "expected_edge_bps", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_paper_positions", "regime", "TEXT DEFAULT 'RANGE'")
+            self._add_column_if_missing(conn, "crypto_paper_positions", "max_hold_ms", "INTEGER")
+            self._add_column_if_missing(conn, "crypto_paper_positions", "risk_loss_usd", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_paper_positions", "stop_loss_distance_usd", "REAL DEFAULT 0.0")
 
             conn.commit()
 
@@ -385,7 +398,15 @@ class SQLiteStore:
                 take_profit_price REAL,
                 opened_at_ms      INTEGER NOT NULL,
                 closed_at_ms      INTEGER,
-                last_funding_at_ms INTEGER NOT NULL
+                last_funding_at_ms INTEGER NOT NULL,
+                strategy_id       TEXT DEFAULT 'STRAT_UNKNOWN',
+                candidate_id      TEXT DEFAULT '',
+                signal_score      REAL DEFAULT 0.0,
+                expected_edge_bps REAL DEFAULT 0.0,
+                regime            TEXT DEFAULT 'RANGE',
+                max_hold_ms       INTEGER,
+                risk_loss_usd     REAL DEFAULT 0.0,
+                stop_loss_distance_usd REAL DEFAULT 0.0
             );
 
             CREATE INDEX IF NOT EXISTS idx_paper_pos_symbol_status
@@ -394,6 +415,16 @@ class SQLiteStore:
             conn.commit()
 
     def upsert_paper_position(self, p: dict):
+        payload = dict(p)
+        payload.setdefault("strategy_id", "STRAT_UNKNOWN")
+        payload.setdefault("candidate_id", "")
+        payload.setdefault("signal_score", 0.0)
+        payload.setdefault("expected_edge_bps", 0.0)
+        payload.setdefault("regime", "RANGE")
+        payload.setdefault("max_hold_ms", None)
+        payload.setdefault("risk_loss_usd", 0.0)
+        payload.setdefault("stop_loss_distance_usd", 0.0)
+
         with self._get_connection() as conn:
             conn.execute("""
             INSERT INTO crypto_paper_positions (
@@ -402,14 +433,18 @@ class SQLiteStore:
                 mark_price, unrealised_pnl, funding_paid_usdt, total_fees_usdt,
                 exit_price, exit_slippage_bps, exit_fee_usdt, realised_pnl,
                 exit_reason, status, stop_loss_price, take_profit_price,
-                opened_at_ms, closed_at_ms, last_funding_at_ms
+                opened_at_ms, closed_at_ms, last_funding_at_ms,
+                strategy_id, candidate_id, signal_score, expected_edge_bps,
+                regime, max_hold_ms, risk_loss_usd, stop_loss_distance_usd
             ) VALUES (
                 :position_id, :symbol, :direction, :notional_usdt, :leverage,
                 :entry_price, :entry_slippage_bps, :entry_fee_usdt, :margin_usdt,
                 :mark_price, :unrealised_pnl, :funding_paid_usdt, :total_fees_usdt,
                 :exit_price, :exit_slippage_bps, :exit_fee_usdt, :realised_pnl,
                 :exit_reason, :status, :stop_loss_price, :take_profit_price,
-                :opened_at_ms, :closed_at_ms, :last_funding_at_ms
+                :opened_at_ms, :closed_at_ms, :last_funding_at_ms,
+                :strategy_id, :candidate_id, :signal_score, :expected_edge_bps,
+                :regime, :max_hold_ms, :risk_loss_usd, :stop_loss_distance_usd
             )
             ON CONFLICT(position_id) DO UPDATE SET
                 mark_price         = excluded.mark_price,
@@ -424,7 +459,28 @@ class SQLiteStore:
                 status             = excluded.status,
                 closed_at_ms       = excluded.closed_at_ms,
                 last_funding_at_ms = excluded.last_funding_at_ms
-            """, p)
+            """, payload)
+            conn.commit()
+
+    def update_candidate_paper_execution(
+        self,
+        candidate_id: str,
+        entry_price: Optional[float] = None,
+        exit_price: Optional[float] = None,
+        pnl: Optional[float] = None,
+    ):
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            if entry_price is not None:
+                cur.execute(
+                    "UPDATE crypto_candidate_ledger SET actual_paper_entry = ? WHERE candidate_id = ?",
+                    (entry_price, candidate_id)
+                )
+            if exit_price is not None:
+                cur.execute(
+                    "UPDATE crypto_candidate_ledger SET actual_paper_exit = ?, actual_pnl = ? WHERE candidate_id = ?",
+                    (exit_price, pnl, candidate_id)
+                )
             conn.commit()
 
     def get_paper_positions(

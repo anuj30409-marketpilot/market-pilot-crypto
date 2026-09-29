@@ -105,20 +105,20 @@ class StrategyEvaluator:
                 logger.warning("Symbol %s has no deriv state (mark=%s, last_candle=%s)", upper, getattr(tracker, 'mark_price', None), getattr(tracker, 'last_candle_time_ms', None))
                 continue
 
-            # Evaluate Strategy 1
+            # Evaluate Strategy 1, 2, 3
             cand1 = evaluate_funding_reversion(deriv, ob)
-            sqlite_store.insert_candidate(cand1)
-            records.append(cand1)
-
-            # Evaluate Strategy 2
             cand2 = evaluate_orderbook_momentum(deriv, ob)
-            sqlite_store.insert_candidate(cand2)
-            records.append(cand2)
-
-            # Evaluate Strategy 3
             cand3 = evaluate_liquidation_fader(deriv, ob)
-            sqlite_store.insert_candidate(cand3)
-            records.append(cand3)
+
+            for cand in [cand1, cand2, cand3]:
+                sqlite_store.insert_candidate(cand)
+                records.append(cand)
+                if cand.decision == "ACCEPT":
+                    try:
+                        from paper.dispatcher import paper_dispatcher
+                        await paper_dispatcher.dispatch_candidate(cand, collector.orderbooks)
+                    except Exception as e:
+                        logger.error("Error dispatching candidate %s to paper desk: %s", cand.candidate_id, e)
 
         return records
 
