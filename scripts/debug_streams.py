@@ -3,7 +3,7 @@ import websockets
 import json
 
 async def test_streams():
-    url = "wss://fstream.binance.com/stream?streams=btcusdt@markPrice@1s/btcusdt@depth20@100ms"
+    url = "wss://fstream.binance.com/stream?streams=btcusdt@markPrice"
     print("Testing connection to:", url)
     try:
         async with websockets.connect(url, open_timeout=10) as ws:
