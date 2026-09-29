@@ -200,6 +200,19 @@ def get_strategies(status: Optional[str] = Query(None)):
     return strategy_registry.get_active_strategies(st)
 
 
+@app.get("/strategies/audit")
+def get_strategy_audit(strategy_id: Optional[str] = Query(None)):
+    """Runs 16-gate statistical maturity audit across registered strategies."""
+    from scripts.validate_gates import StatisticalGateValidator
+    strat_ids = [strategy_id] if strategy_id else [
+        "STRAT_FUNDING_REVERSION_V1",
+        "STRAT_ORDERBOOK_MOMENTUM_V1",
+        "STRAT_LIQUIDATION_FADER_V1",
+    ]
+    reports = [StatisticalGateValidator(sid).run_validation() for sid in strat_ids]
+    return {"reports": reports}
+
+
 # ── Tri-Rate Currency Endpoints ────────────────────────────────────────────
 
 @app.get("/currency")
