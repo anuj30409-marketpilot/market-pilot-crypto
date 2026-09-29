@@ -129,7 +129,7 @@ class BinanceStreamCollector:
 
             # 3. Depth snapshot / diff
             elif "@depth" in stream_name:
-                symbol = (payload.get("s") or "").upper()
+                symbol = (payload.get("s") or (stream_name.split("@")[0] if "@" in stream_name else "")).upper()
                 if symbol in self.orderbooks:
                     bids = payload.get("b", [])
                     asks = payload.get("a", [])
@@ -142,7 +142,7 @@ class BinanceStreamCollector:
 
             # 4. Mark Price & Funding stream
             elif "@markPrice" in stream_name:
-                symbol = (payload.get("s") or "").upper()
+                symbol = (payload.get("s") or (stream_name.split("@")[0] if "@" in stream_name else "")).upper()
                 derivatives_engine.handle_mark_price_message(symbol, payload)
                 if symbol in self.feed_statuses:
                     event_time_ms = payload.get("E", received_ms)
