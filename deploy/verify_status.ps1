@@ -16,16 +16,16 @@ if (-not (Test-Path $SSH_KEY)) {
     exit 1
 }
 
-$COMMANDS = @"
-echo '=== [1/4] SYSTEMD DAEMON STATUS ==='
+$COMMANDS = @'
+echo "=== [1/4] SYSTEMD DAEMON STATUS ==="
 sudo systemctl status crypto-pilot.service --no-pager -l | head -n 12
 
-echo ''
-echo '=== [2/4] RECENT DAEMON LOGS (LAST 15 LINES) ==='
+echo ""
+echo "=== [2/4] RECENT DAEMON LOGS (LAST 15 LINES) ==="
 sudo journalctl -u crypto-pilot.service -n 15 --no-pager
 
-echo ''
-echo '=== [3/4] LATEST CANDIDATE EVALUATIONS ==='
+echo ""
+echo "=== [3/4] LATEST CANDIDATE EVALUATIONS ==="
 curl -s http://127.0.0.1:8800/candidates?limit=8 | python3 -c "
 import sys, json
 try:
@@ -44,8 +44,8 @@ except Exception as e:
     print('Failed to parse candidates:', e)
 "
 
-echo ''
-echo '=== [4/4] DUAL-DESK PAPER ACCOUNT SUMMARY ==='
+echo ""
+echo "=== [4/4] DUAL-DESK PAPER ACCOUNT SUMMARY ==="
 curl -s http://127.0.0.1:8800/paper/summary | python3 -c "
 import sys, json
 try:
@@ -57,8 +57,6 @@ try:
 except Exception as e:
     print('Failed to parse paper summary:', e)
 "
-
-echo ''
-"@
+'@
 
 ssh -i $SSH_KEY -o StrictHostKeyChecking=no "$USER@$VM2_IP" $COMMANDS
