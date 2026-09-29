@@ -7,7 +7,7 @@ Enforces the core rule:
 - Any risk breach or parity breakdown can immediately demote a strategy to SUSPENDED.
 """
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 import json
 from core.clock import now_utc_ms
