@@ -6,8 +6,15 @@ Raw high-volume data and normalized research data have separate storage responsi
 from pathlib import Path
 from typing import List
 from datetime import datetime, timezone
-import pyarrow as pa
-import pyarrow.parquet as pq
+try:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    HAS_PYARROW = True
+except ImportError:
+    pa = None
+    pq = None
+    HAS_PYARROW = False
+
 from config.settings import settings
 from core.contracts import AggTrade
 
@@ -18,7 +25,7 @@ class ParquetStore:
 
     def write_agg_trades_batch(self, trades: List[AggTrade]):
         """Flushes a batch of aggregated trades into hourly partitioned Parquet files."""
-        if not trades:
+        if not HAS_PYARROW or not trades:
             return
 
         # Group trades by symbol and date/hour

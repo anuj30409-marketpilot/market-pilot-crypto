@@ -14,6 +14,11 @@ from core.contracts import CandidateRecord
 from storage.sqlite_store import sqlite_store
 from core.clock import now_utc_iso
 from paper.paper_engine import paper_engine
+from config.currency import currency_service
+from storage.registry import StrategyRegistry, StrategyDefinition, StrategyStatus
+from core.regime import MarketRegime
+
+strategy_registry = StrategyRegistry(sqlite_store)
 
 app = FastAPI(
     title="Market Pilot Crypto Research API",
@@ -184,3 +189,46 @@ async def close_paper_position(position_id: str, reason: str = Query("MANUAL")):
 def get_paper_summary():
     """Returns aggregate P&L, fees, funding drag and capital utilisation."""
     return paper_engine.get_summary()
+
+
+# ── Strategy Registry & Governance Endpoints ───────────────────────────────
+
+@app.get("/strategies")
+def get_strategies(status: Optional[str] = Query(None)):
+    """Returns strategies from the immutable registry."""
+    st = StrategyStatus(status) if status else None
+    return strategy_registry.get_active_strategies(st)
+
+
+# ── Tri-Rate Currency Endpoints ────────────────────────────────────────────
+
+@app.get("/currency")
+def get_currency_rates():
+    """Returns current market, settlement, and display rates with audit status."""
+    return {
+        "market_usdt_inr": currency_service.get_rate("MARKET"),
+        "exchange_settlement_usd_inr": currency_service.get_rate("SETTLEMENT"),
+        "display_usd_inr": currency_service.get_rate("DISPLAY"),
+        "last_update_ms": currency_service.last_update_ms,
+    }
+
+
+# ── Market Regime Endpoints ────────────────────────────────────────────────
+
+@app.get("/regime")
+def get_regime(symbol: str = Query("BTCUSDT")):
+    """Returns current 7-state market regime classification for symbol."""
+    upper = symbol.upper()
+    if upper in derivatives_engine.trackers:
+        state = derivatives_engine.trackers[upper].get_state()
+        if state:
+            return {
+                "symbol": upper,
+                "regime": state.regime,
+                "funding_zscore": state.funding_zscore_7d,
+                "cvd_zscore": state.cvd_notional_usd_zscore,
+                "liquidation_intensity": state.liquidation_intensity,
+                "timestamp_ms": state.state_time_ms,
+            }
+    return {"symbol": upper, "regime": "RANGE", "status": "WARMING_UP"}
+

@@ -14,7 +14,10 @@ import asyncio
 import logging
 from typing import Dict, List, Optional
 import websockets
-import orjson
+try:
+    import orjson
+except ImportError:
+    import json as orjson
 from config.settings import settings
 from core.clock import now_utc_ms
 from core.contracts import Candle1m, AggTrade

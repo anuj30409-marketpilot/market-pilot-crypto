@@ -24,6 +24,7 @@ class SymbolDerivativesTracker:
         self.mark_price: float = 0.0
         self.index_price: float = 0.0
         self.funding_rate: float = 0.0
+        self.funding_interval_hours: int = 8
         self.next_funding_time_ms: int = 0
         self.open_interest: float = 0.0
         self.last_oi_fetch_ms: int = 0
@@ -31,8 +32,18 @@ class SymbolDerivativesTracker:
         
         # 1m flow metrics
         self.cvd_1m: float = 0.0
+        self.cvd_notional_usd_1m: float = 0.0
+        self.recent_cvd_notionals: List[float] = []
         self.taker_buy_ratio_1m: float = 0.5
         self.last_candle_time_ms: int = 0
+        
+        # Liquidation and price history for regime classification
+        self.liquidation_notional_60s: float = 0.0
+        self.recent_liquidation_notionals: List[float] = []
+        self.recent_closes: List[float] = []
+        self.recent_highs: List[float] = []
+        self.recent_lows: List[float] = []
+        self.recent_volumes: List[float] = []
 
     def update_mark_price(self, mark: float, index: float, funding_rate: float, next_funding_time: int):
         self.mark_price = mark
@@ -51,8 +62,30 @@ class SymbolDerivativesTracker:
         taker_buy = c.taker_buy_base_volume
         taker_sell = max(0.0, total_vol - taker_buy)
         self.cvd_1m = taker_buy - taker_sell
+        mark = self.mark_price or c.close
+        self.cvd_notional_usd_1m = self.cvd_1m * mark
+        self.recent_cvd_notionals.append(self.cvd_notional_usd_1m)
+        if len(self.recent_cvd_notionals) > 60:
+            self.recent_cvd_notionals.pop(0)
+
         self.taker_buy_ratio_1m = (taker_buy / total_vol) if total_vol > 0 else 0.5
         self.last_candle_time_ms = c.open_time_ms
+
+        self.recent_closes.append(c.close)
+        self.recent_highs.append(c.high)
+        self.recent_lows.append(c.low)
+        self.recent_volumes.append(c.volume)
+        if len(self.recent_closes) > 200:
+            self.recent_closes.pop(0)
+            self.recent_highs.pop(0)
+            self.recent_lows.pop(0)
+            self.recent_volumes.pop(0)
+
+    def record_liquidation(self, notional_usd: float):
+        self.liquidation_notional_60s += notional_usd
+        self.recent_liquidation_notionals.append(notional_usd)
+        if len(self.recent_liquidation_notionals) > 30:
+            self.recent_liquidation_notionals.pop(0)
 
     def compute_basis_bps(self) -> float:
         if self.index_price > 0:
@@ -69,10 +102,62 @@ class SymbolDerivativesTracker:
             return (self.funding_rate - mean) / std
         return 0.0
 
+    def compute_cvd_zscore(self) -> float:
+        if len(self.recent_cvd_notionals) < 10:
+            return 0.0
+        mean = sum(self.recent_cvd_notionals) / len(self.recent_cvd_notionals)
+        variance = sum((x - mean) ** 2 for x in self.recent_cvd_notionals) / len(self.recent_cvd_notionals)
+        std = variance ** 0.5
+        if std > 1e-9:
+            return (self.cvd_notional_usd_1m - mean) / std
+        return 0.0
+
+    def compute_liquidation_intensity(self) -> float:
+        if not self.recent_liquidation_notionals:
+            return 1.0
+        sorted_liq = sorted(self.recent_liquidation_notionals)
+        median = sorted_liq[len(sorted_liq) // 2]
+        if median > 1000.0:
+            return self.liquidation_notional_60s / median
+        return 1.0
+
     def get_state(self, quarantine_state: str = "NORMAL") -> Optional[DerivativesState]:
         if self.mark_price == 0.0:
             return None
         now_ms = now_utc_ms()
+        from core.regime import classify_regime
+
+        funding_z = self.compute_funding_zscore()
+        cvd_z = self.compute_cvd_zscore()
+        liq_intensity = self.compute_liquidation_intensity()
+        
+        oi_usd = self.open_interest * self.mark_price
+        liq_oi_impact = (self.liquidation_notional_60s / oi_usd) if oi_usd > 0 else 0.0
+
+        dist_funding_mins = max(0, (self.next_funding_time_ms - now_ms) // 60000) if self.next_funding_time_ms > now_ms else 0
+        annualized = self.funding_rate * (24.0 / max(1, self.funding_interval_hours)) * 365.0 * 100.0
+
+        # Percentile
+        if self.recent_funding_rates:
+            less_count = sum(1 for r in self.recent_funding_rates if r < self.funding_rate)
+            pct = (less_count / len(self.recent_funding_rates)) * 100.0
+        else:
+            pct = 50.0
+
+        regime_state = classify_regime(
+            symbol=self.symbol,
+            recent_closes=self.recent_closes,
+            recent_highs=self.recent_highs,
+            recent_lows=self.recent_lows,
+            recent_volumes=self.recent_volumes,
+            funding_zscore=funding_z,
+            liquidation_intensity=liq_intensity,
+            cvd_notional_zscore=cvd_z,
+            feed_quarantine=(quarantine_state != "NORMAL"),
+            feed_latency_ms=0,
+            timestamp_ms=now_ms,
+        )
+
         return DerivativesState(
             symbol=self.symbol,
             mark_price=self.mark_price,
@@ -80,9 +165,20 @@ class SymbolDerivativesTracker:
             basis_bps=self.compute_basis_bps(),
             open_interest=self.open_interest,
             funding_rate=self.funding_rate,
-            funding_zscore_7d=self.compute_funding_zscore(),
+            funding_interval_hours=self.funding_interval_hours,
+            annualized_funding=annualized,
+            funding_zscore_7d=funding_z,
+            funding_percentile=pct,
+            distance_to_next_funding_mins=dist_funding_mins,
+            predicted_funding=self.funding_rate,
             cvd_1m=self.cvd_1m,
+            cvd_notional_usd_1m=self.cvd_notional_usd_1m,
+            cvd_notional_usd_zscore=cvd_z,
             taker_buy_ratio_1m=self.taker_buy_ratio_1m,
+            liquidation_notional_60s=self.liquidation_notional_60s,
+            liquidation_intensity=liq_intensity,
+            liquidation_oi_impact=liq_oi_impact,
+            regime=regime_state.primary_regime.value,
             quarantine_state=quarantine_state,
             state_time_ms=self.last_candle_time_ms or now_ms,
             created_at_iso=ms_to_iso(now_ms)

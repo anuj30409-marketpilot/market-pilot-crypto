@@ -75,12 +75,26 @@ class BoundedOrderbook:
         # Microprice calculation: weighted by opposite top-level size
         denom = best_bid_qty + best_ask_qty
         microprice = ((best_bid_qty * best_ask) + (best_ask_qty * best_bid)) / denom if denom > 0 else mid_price
+        microprice_edge_bps = ((microprice - mid_price) / mid_price * 10000.0) if mid_price > 0 else 0.0
 
-        # Depth tiers
-        bid_depth_5 = sum(q for _, q in sorted_bids[:5])
-        ask_depth_5 = sum(q for _, q in sorted_asks[:5])
-        d5_total = bid_depth_5 + ask_depth_5
-        imbalance_5 = (bid_depth_5 - ask_depth_5) / d5_total if d5_total > 0 else 0.0
+        # Helper for tier imbalance
+        def calc_imbalance(bids_tier, asks_tier):
+            b_vol = sum(q for _, q in bids_tier)
+            a_vol = sum(q for _, q in asks_tier)
+            tot = b_vol + a_vol
+            imb = (b_vol - a_vol) / tot if tot > 0 else 0.0
+            return b_vol, a_vol, imb
+
+        bid_depth_1, ask_depth_1, imbalance_1 = calc_imbalance(sorted_bids[:1], sorted_asks[:1])
+        bid_depth_3, ask_depth_3, imbalance_3 = calc_imbalance(sorted_bids[:3], sorted_asks[:3])
+        bid_depth_5, ask_depth_5, imbalance_5 = calc_imbalance(sorted_bids[:5], sorted_asks[:5])
+        bid_depth_10, ask_depth_10, imbalance_10 = calc_imbalance(sorted_bids[:10], sorted_asks[:10])
+
+        # Notional depth for 5 levels
+        bid_notional_5 = sum(p * q for p, q in sorted_bids[:5])
+        ask_notional_5 = sum(p * q for p, q in sorted_asks[:5])
+        tot_notional_5 = bid_notional_5 + ask_notional_5
+        notional_imbalance_5 = (bid_notional_5 - ask_notional_5) / tot_notional_5 if tot_notional_5 > 0 else 0.0
 
         bid_depth_20 = sum(q for _, q in sorted_bids[:20])
         ask_depth_20 = sum(q for _, q in sorted_asks[:20])
@@ -96,9 +110,16 @@ class BoundedOrderbook:
             microprice=microprice,
             spread=spread,
             spread_bps=spread_bps,
+            microprice_edge_bps=microprice_edge_bps,
             bid_depth_5=bid_depth_5,
             ask_depth_5=ask_depth_5,
+            imbalance_1=imbalance_1,
+            imbalance_3=imbalance_3,
             imbalance_5=imbalance_5,
+            imbalance_10=imbalance_10,
+            bid_notional_5=bid_notional_5,
+            ask_notional_5=ask_notional_5,
+            notional_imbalance_5=notional_imbalance_5,
             bid_depth_20=bid_depth_20,
             ask_depth_20=ask_depth_20,
             imbalance_20=imbalance_20,

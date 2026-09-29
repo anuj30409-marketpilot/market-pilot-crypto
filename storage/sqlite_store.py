@@ -3,6 +3,7 @@
 Stores 1-minute aggregated candles, feed health events, and paper trading state.
 Configured with WAL mode and busy timeouts for high reliability on low-resource VMs.
 """
+import json
 import sqlite3
 from pathlib import Path
 from typing import List, Optional
@@ -22,6 +23,12 @@ class SQLiteStore:
         conn.execute("PRAGMA synchronous = NORMAL;")
         conn.execute("PRAGMA busy_timeout = 30000;")
         return conn
+
+    def _add_column_if_missing(self, conn: sqlite3.Connection, table: str, column: str, col_type: str):
+        cur = conn.execute(f"PRAGMA table_info({table})")
+        cols = [r[1] for r in cur.fetchall()]
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
 
     def _init_db(self):
         with self._get_connection() as conn:
@@ -100,7 +107,69 @@ class SQLiteStore:
 
             CREATE INDEX IF NOT EXISTS idx_crypto_candidates_time 
             ON crypto_candidate_ledger (symbol, timestamp_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS crypto_currency_rates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp_ms INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                base_currency TEXT NOT NULL,
+                quote_currency TEXT NOT NULL,
+                rate REAL NOT NULL,
+                rate_type TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                is_stale INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_curr_rate_ts 
+            ON crypto_currency_rates(timestamp_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS crypto_strategy_registry (
+                strategy_id TEXT NOT NULL,
+                strategy_name TEXT NOT NULL,
+                version TEXT NOT NULL,
+                hypothesis TEXT NOT NULL,
+                feature_version TEXT NOT NULL,
+                parameter_version TEXT NOT NULL,
+                entry_rules_json TEXT NOT NULL,
+                exit_rules_json TEXT NOT NULL,
+                risk_profile_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                approved_at_ms INTEGER,
+                approved_by TEXT,
+                research_commit_hash TEXT NOT NULL,
+                PRIMARY KEY (strategy_id, version)
+            );
             """)
+
+            # Run migrations for derivatives state
+            self._add_column_if_missing(conn, "crypto_derivatives_state", "funding_interval_hours", "INTEGER DEFAULT 8")
+            self._add_column_if_missing(conn, "crypto_derivatives_state", "annualized_funding", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_derivatives_state", "funding_percentile", "REAL DEFAULT 50.0")
+            self._add_column_if_missing(conn, "crypto_derivatives_state", "distance_to_next_funding_mins", "INTEGER DEFAULT 0")
+            self._add_column_if_missing(conn, "crypto_derivatives_state", "predicted_funding", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_derivatives_state", "cvd_notional_usd_1m", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_derivatives_state", "cvd_notional_usd_zscore", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_derivatives_state", "liquidation_notional_60s", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_derivatives_state", "liquidation_intensity", "REAL DEFAULT 1.0")
+            self._add_column_if_missing(conn, "crypto_derivatives_state", "liquidation_oi_impact", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_derivatives_state", "regime", "TEXT DEFAULT 'RANGE'")
+
+            # Run migrations for candidate ledger
+            self._add_column_if_missing(conn, "crypto_candidate_ledger", "strategy_id", "TEXT DEFAULT 'STRAT_UNKNOWN'")
+            self._add_column_if_missing(conn, "crypto_candidate_ledger", "strategy_version", "TEXT DEFAULT 'v1.0'")
+            self._add_column_if_missing(conn, "crypto_candidate_ledger", "feature_version", "TEXT DEFAULT 'v1.0'")
+            self._add_column_if_missing(conn, "crypto_candidate_ledger", "parameter_version", "TEXT DEFAULT 'v1.0'")
+            self._add_column_if_missing(conn, "crypto_candidate_ledger", "signal_score", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_candidate_ledger", "expected_edge_bps", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_candidate_ledger", "estimated_cost_bps", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_candidate_ledger", "expected_net_edge_bps", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_candidate_ledger", "regime", "TEXT DEFAULT 'RANGE'")
+            self._add_column_if_missing(conn, "crypto_candidate_ledger", "rejection_codes", "TEXT DEFAULT '[]'")
+            self._add_column_if_missing(conn, "crypto_candidate_ledger", "conversion_rate_applied", "REAL DEFAULT 89.50")
+            self._add_column_if_missing(conn, "crypto_candidate_ledger", "research_venue", "TEXT DEFAULT 'BINANCE'")
+            self._add_column_if_missing(conn, "crypto_candidate_ledger", "execution_venue", "TEXT DEFAULT 'DELTA_INDIA'")
+
             conn.commit()
 
     def upsert_candle(self, c: Candle1m):
@@ -172,25 +241,45 @@ class SQLiteStore:
             conn.execute("""
             INSERT INTO crypto_derivatives_state (
                 symbol, mark_price, index_price, basis_bps,
-                open_interest, funding_rate, funding_zscore_7d,
-                cvd_1m, taker_buy_ratio_1m, quarantine_state,
-                state_time_ms, created_at_iso
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                open_interest, funding_rate, funding_interval_hours,
+                annualized_funding, funding_zscore_7d, funding_percentile,
+                distance_to_next_funding_mins, predicted_funding,
+                cvd_1m, cvd_notional_usd_1m, cvd_notional_usd_zscore,
+                taker_buy_ratio_1m, liquidation_notional_60s,
+                liquidation_intensity, liquidation_oi_impact,
+                regime, quarantine_state, state_time_ms, created_at_iso
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(symbol, state_time_ms) DO UPDATE SET
                 mark_price = excluded.mark_price,
                 index_price = excluded.index_price,
                 basis_bps = excluded.basis_bps,
                 open_interest = excluded.open_interest,
                 funding_rate = excluded.funding_rate,
+                funding_interval_hours = excluded.funding_interval_hours,
+                annualized_funding = excluded.annualized_funding,
                 funding_zscore_7d = excluded.funding_zscore_7d,
+                funding_percentile = excluded.funding_percentile,
+                distance_to_next_funding_mins = excluded.distance_to_next_funding_mins,
+                predicted_funding = excluded.predicted_funding,
                 cvd_1m = excluded.cvd_1m,
+                cvd_notional_usd_1m = excluded.cvd_notional_usd_1m,
+                cvd_notional_usd_zscore = excluded.cvd_notional_usd_zscore,
                 taker_buy_ratio_1m = excluded.taker_buy_ratio_1m,
+                liquidation_notional_60s = excluded.liquidation_notional_60s,
+                liquidation_intensity = excluded.liquidation_intensity,
+                liquidation_oi_impact = excluded.liquidation_oi_impact,
+                regime = excluded.regime,
                 quarantine_state = excluded.quarantine_state,
                 created_at_iso = excluded.created_at_iso
             """, (
                 s.symbol, s.mark_price, s.index_price, s.basis_bps,
-                s.open_interest, s.funding_rate, s.funding_zscore_7d,
-                s.cvd_1m, s.taker_buy_ratio_1m, s.quarantine_state,
+                s.open_interest, s.funding_rate, s.funding_interval_hours,
+                s.annualized_funding, s.funding_zscore_7d, s.funding_percentile,
+                s.distance_to_next_funding_mins, s.predicted_funding,
+                s.cvd_1m, s.cvd_notional_usd_1m, s.cvd_notional_usd_zscore,
+                s.taker_buy_ratio_1m, s.liquidation_notional_60s,
+                s.liquidation_intensity, s.liquidation_oi_impact,
+                s.regime, s.quarantine_state,
                 s.state_time_ms, s.created_at_iso
             ))
             conn.commit()
@@ -211,15 +300,26 @@ class SQLiteStore:
             conn.execute("""
             INSERT INTO crypto_candidate_ledger (
                 candidate_id, timestamp_ms, symbol, origin,
+                strategy_id, strategy_version, feature_version, parameter_version,
                 engine_version, model_version, signal_version,
-                decision, decision_reason, hypothetical_entry,
-                hypothetical_exit, hypothetical_pnl,
+                decision, decision_reason, signal_score,
+                expected_edge_bps, estimated_cost_bps, expected_net_edge_bps,
+                regime, rejection_codes, conversion_rate_applied,
+                research_venue, execution_venue,
+                hypothetical_entry, hypothetical_exit, hypothetical_pnl,
                 actual_paper_entry, actual_paper_exit, actual_pnl,
                 created_at_iso
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(candidate_id) DO UPDATE SET
                 decision = excluded.decision,
                 decision_reason = excluded.decision_reason,
+                signal_score = excluded.signal_score,
+                expected_edge_bps = excluded.expected_edge_bps,
+                estimated_cost_bps = excluded.estimated_cost_bps,
+                expected_net_edge_bps = excluded.expected_net_edge_bps,
+                regime = excluded.regime,
+                rejection_codes = excluded.rejection_codes,
+                conversion_rate_applied = excluded.conversion_rate_applied,
                 hypothetical_entry = excluded.hypothetical_entry,
                 hypothetical_exit = excluded.hypothetical_exit,
                 hypothetical_pnl = excluded.hypothetical_pnl,
@@ -228,9 +328,13 @@ class SQLiteStore:
                 actual_pnl = excluded.actual_pnl
             """, (
                 c.candidate_id, c.timestamp_ms, c.symbol, c.origin,
+                c.strategy_id, c.strategy_version, c.feature_version, c.parameter_version,
                 c.engine_version, c.model_version, c.signal_version,
-                c.decision, c.decision_reason, c.hypothetical_entry,
-                c.hypothetical_exit, c.hypothetical_pnl,
+                c.decision, c.decision_reason, c.signal_score,
+                c.expected_edge_bps, c.estimated_cost_bps, c.expected_net_edge_bps,
+                c.regime, json.dumps(c.rejection_codes), c.conversion_rate_applied,
+                c.research_venue, c.execution_venue,
+                c.hypothetical_entry, c.hypothetical_exit, c.hypothetical_pnl,
                 c.actual_paper_entry, c.actual_paper_exit, c.actual_pnl,
                 c.created_at_iso
             ))
