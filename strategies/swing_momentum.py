@@ -34,12 +34,12 @@ VERSION      = "1.0.0"
 FEATURE_VERSION   = "1.0"
 PARAMETER_VERSION = "1.0"
 
-# Entry thresholds
-EMA_FAST  = 20
-EMA_SLOW  = 50
-DONCHIAN_PERIOD   = 20
+# Entry thresholds (Intraday hourly swing horizon, filtering 20m noise chop)
+EMA_FAST  = 30
+EMA_SLOW  = 90
+DONCHIAN_PERIOD   = 60
 ADX_PERIOD        = 14
-VOLUME_RATIO_MIN  = 1.25    # Volume must be >= 1.25× the 20-period SMA of volume
+VOLUME_RATIO_MIN  = 1.30    # Volume must be >= 1.30× the 60-period SMA of volume
 
 # Execution
 TP_PCT        = 1.50
@@ -180,7 +180,7 @@ def evaluate_swing_momentum(
 
         # 6. Volume expansion check
         # Use max of latest completed bar and current in-progress bar so evaluation timing within minute doesn't penalize
-        vol_sma = _sma(volumes[-21:-1] if len(volumes) >= 22 else volumes[:-1], DONCHIAN_PERIOD)
+        vol_sma = _sma(volumes[-DONCHIAN_PERIOD - 1:-1] if len(volumes) >= (DONCHIAN_PERIOD + 1) else volumes[:-1], DONCHIAN_PERIOD)
         eval_vol = max(volumes[-1], volumes[-2]) if len(volumes) >= 2 else (volumes[-1] if volumes else 0.0)
         vol_ratio = (eval_vol / vol_sma) if vol_sma and vol_sma > 0 else 0.0
 
@@ -204,13 +204,18 @@ def evaluate_swing_momentum(
         # ADX confirmation
         adx_ok = (adx_val is not None and adx_val >= 22.0)
 
+        cvd_z = getattr(deriv, "cvd_notional_usd_zscore", 0.0)
+        cvd_ok = (cvd_z >= 0.30) if long_setup else ((cvd_z <= -0.30) if short_setup else False)
+
         direction = None
         if long_setup or short_setup:
             if not vol_ok:
                 rejection_codes.append("REJECT_LOW_VOLUME_EXPANSION")
             if not adx_ok:
                 rejection_codes.append("REJECT_LOW_ADX_STRENGTH")
-            if vol_ok and adx_ok:
+            if not cvd_ok:
+                rejection_codes.append("REJECT_CVD_DIRECTION_MISMATCH")
+            if vol_ok and adx_ok and cvd_ok:
                 direction = "LONG" if long_setup else "SHORT"
         else:
             rejection_codes.append("REJECT_SIGNAL_THRESHOLD_NOT_MET")

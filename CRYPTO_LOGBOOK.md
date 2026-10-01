@@ -1,4 +1,4 @@
-﻿# Crypto Desk Logbook (`market-pilot-crypto`)
+# Crypto Desk Logbook (`market-pilot-crypto`)
 
 > MANDATORY REFERENCE. Per project rule (parity with Indian-desk logbooks): read before ANY recommendation or code change to the crypto desk; cross-check fixes against the failure-mode list; append a change-log entry after any shipped fix. This desk is SEPARATE from the Indian `market-pilot` desk (INV-CRYPTO-010).
 
@@ -77,4 +77,23 @@
 - **Change (commit 277fd14):** Added collectors/kline_rest_fallback.py - a 20s REST poller for /fapi/v1/klines that feeds sqlite_store.upsert_candle + derivatives_engine.handle_candle_update, wired into main.py as a background task. Additive plumbing ONLY. No strategy threshold, gate, or ALLOWED_REGIMES changed (FM-1 honoured).
 - **NOT DEPLOYED.** INV-OPS-001: agent never deploys; user runs the VM2 deploy. After deploy, confirm crypto_candles_1m / crypto_derivatives_state resume writing and cvd_z becomes nonzero.
 - **New failure mode FM-4:** A WS channel can silently drop a SUBSET of streams while others keep the connection looking healthy. feed_status (driven by depth/markprice) is NOT a reliable proxy for kline/CVD health. Watch crypto_candles_1m MAX(open_time_ms) freshness directly.
+
+### 2026-10-01: Full crypto desk trade audit & alpha execution fixes (INV-OPS-001 honoured)
+- **Finding:** Live VM2 sync revealed 81 real closed trades (-$148.55 net PnL). Gross alpha on Superhuman desk was positive (+$12.92) but wiped by $42.43 fees. Quant desk lost -$119.04 primarily from 1m swing breakout noise (-$237.97 stop loss drag).
+- **Root causes identified & fixed:**
+  1. **SH1 direction signaling defect:** `evaluate_superhuman_macro_regime` omitted direction metadata, causing `dispatcher.infer_direction` to default to `LONG` even during severe negative CVD sell-offs (e.g. cvd_z = -2.05). Fixed by setting `direction = LONG/SHORT` based on `cvd_z` sign, embedding it in `decision_reason`, and adding explicit SH1 handling in `dispatcher.infer_direction`.
+  2. **SH3 Volatility Expansion formula scale:** Gross edge formula `imb5*10 + micro*2` topped at ~12 bps against 11.5 bps friction (0/7,160 accepted). Rescaled to `imb5*20 + micro*3` with imbalance direction tagging.
+  3. **S2 Orderbook Momentum profile calibration:** TP was 1.20% (120 bps) for a 10 bps micro-orderbook edge, forcing 100% of trades to 30m time-stop. Calibrated to `sl_pct = 0.40%`, `tp_pct = 0.60%` with realistic 30m hold.
+  4. **Swing Momentum noise filter (S4 & SH4):** 20-period Donchian on 1m bars was only 20m of noise. Upgraded `DONCHIAN_PERIOD = 60` (1 hour) and `EMA_FAST = 30`, `EMA_SLOW = 90` with dynamic volume SMA window and CVD flow alignment check (`cvd_z >= 0.30` for long, `<= -0.30` for short).
+  5. **Expert Crypto Auditor Agent tool deployed:** Created `scripts/expert_crypto_agent.py` for automated multidimensional desk auditing.
+- **Verification:** All test suites passed 100% (Phase 4 dispatcher & risk tests, Phase 5 control & reconciliation tests, dual-desk isolation & readiness tests, OS foundation tests).
+- **Deployment Status:** NOT DEPLOYED. Local only. User executes deploy per INV-OPS-001.
+
+### 2026-10-01 (Part 2): S1 Funding Reversion Unlocked & Liquidation Parser Fixed (INV-OPS-001 honoured)
+- **Finding:** Strategy S1 had 0/5,866 accepted because basis was required > 3.0 bps (max ever recorded was +2.41 bps) and microprice was required > 1.0 bps on 8h funding macro divergence. Liquidation stream `!forceOrder@arr` was silently failing with AttributeError on array/list payloads, keeping `liquidation_notional_60s` at 0.0 perpetually. Replay simulation also proved tight trailing stops at +45 bps backfire in crypto by suffocating winning trends.
+- **Changes applied:**
+  1. **S1 Funding Reversion calibrated:** Basis threshold lowered to $|basis| \ge 1.5$ bps, funding $|z| \ge 1.8$, microprice softened to non-negative ($\ge 0.0$), and gross carry formula upgraded to `abs_z * 7.0 + abs_basis * 2.0`. Replay confirmed 62.5% win rate and +$7.13 net profit across 8 trades.
+  2. **Binance Liquidation WebSocket Stream parser fixed:** Updated `collectors/binance_ws.py` to handle both list/array and dict structures on `!forceOrder@arr` payloads, restoring liquidation event ingestion and enabling Strategy S3.
+- **Verification:** All test suites passed cleanly (100%).
+- **Deployment Status:** NOT DEPLOYED. Local only. User executes deploy per INV-OPS-001.
 

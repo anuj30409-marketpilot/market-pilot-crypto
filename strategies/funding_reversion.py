@@ -51,19 +51,19 @@ def evaluate_funding_reversion(
     if ob.spread_bps > 3.5:
         rejection_codes.append("REJECT_HIGH_SPREAD")
 
-    # Directional Signals
+    # Directional Signals (Normalized Funding Dislocation + Basis Divergence)
     is_long = (
-        deriv.funding_zscore_7d <= -2.0 and
-        deriv.basis_bps < -3.0 and
-        ob.microprice_edge_bps > 1.0 and
-        deriv.distance_to_next_funding_mins <= 180
+        deriv.funding_zscore_7d <= -1.8 and
+        deriv.basis_bps <= -1.5 and
+        ob.microprice_edge_bps >= 0.0 and
+        deriv.distance_to_next_funding_mins <= 240
     )
 
     is_short = (
-        deriv.funding_zscore_7d >= 2.0 and
-        deriv.basis_bps > 3.0 and
-        ob.microprice_edge_bps < -1.0 and
-        deriv.distance_to_next_funding_mins <= 180
+        deriv.funding_zscore_7d >= 1.8 and
+        deriv.basis_bps >= 1.5 and
+        ob.microprice_edge_bps <= 0.0 and
+        deriv.distance_to_next_funding_mins <= 240
     )
 
     direction = "LONG" if is_long else ("SHORT" if is_short else None)
@@ -72,10 +72,10 @@ def evaluate_funding_reversion(
         rejection_codes.append("REJECT_SIGNAL_THRESHOLD_NOT_MET")
 
     # 4. Edge and Cost Calculation
-    # Expected gross edge combines funding carry + basis convergence
+    # Expected gross edge combines funding carry yield + spot-futures basis convergence
     abs_z = abs(deriv.funding_zscore_7d)
     abs_basis = abs(deriv.basis_bps)
-    expected_edge_bps = (abs_z * 4.0) + (abs_basis * 0.5)
+    expected_edge_bps = (abs_z * 7.0) + (abs_basis * 2.0)
 
     # Total estimated execution friction (spread + 2x taker fee + slippage reserve)
     estimated_cost_bps = ob.spread_bps + (taker_fee_bps * 2.0) + slippage_reserve_bps

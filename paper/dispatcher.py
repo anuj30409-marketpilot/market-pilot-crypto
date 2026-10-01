@@ -37,8 +37,8 @@ STRATEGY_PROFILES = {
         "leverage": 5,
     },
     "STRAT_ORDERBOOK_MOMENTUM_V1": {
-        "sl_pct": 0.60,
-        "tp_pct": 1.20,
+        "sl_pct": 0.40,
+        "tp_pct": 0.60,
         "max_hold_ms": 30 * 60 * 1000,  # 30 minutes
         "leverage": 5,
     },
@@ -229,6 +229,18 @@ class PaperDispatcher:
         # S4/SH4: Swing Momentum — direction is explicit in the decision reason
         if "SWING" in strat:
             if "SHORT" in reason:
+                return "SHORT"
+            return "LONG"
+
+        # SH1: Superhuman Macro Regime
+        if "MACRO" in strat or "SH1" in strat:
+            if "SHORT" in reason or "BEARISH" in reason:
+                return "SHORT"
+            return "LONG"
+
+        # SH3: Superhuman Volatility Expansion
+        if "VOLATILITY" in strat or "SH3" in strat:
+            if "SHORT" in reason or "BEARISH" in reason:
                 return "SHORT"
             return "LONG"
 

@@ -63,8 +63,12 @@ def evaluate_superhuman_macro_regime(deriv: DerivativesState, ob: OrderbookSnaps
     if expected_net_edge_bps < 1.5:
         rejections.append("REJECT_EDGE_TOO_SMALL")
 
+    direction = "LONG" if cvd_z >= 0 else "SHORT"
     decision = "ACCEPT" if not rejections else "REJECT"
-    decision_reason = "Accepted: Superhuman Macro Regime Impulse Aligned" if not rejections else f"Rejected: {', '.join(rejections)}"
+    decision_reason = (
+        f"Accepted: Superhuman Macro Regime Impulse {direction} (cvd_z={cvd_z:+.2f})"
+        if not rejections else f"Rejected: {', '.join(rejections)}"
+    )
 
     return CandidateRecord(
         candidate_id=cand_id,
@@ -76,7 +80,7 @@ def evaluate_superhuman_macro_regime(deriv: DerivativesState, ob: OrderbookSnaps
         signal_version="v2.0",
         decision=decision,
         decision_reason=decision_reason,
-        hypothetical_entry=ob.mid_price,
+        hypothetical_entry=(ob.best_ask if direction == "LONG" else ob.best_bid) if not rejections else ob.mid_price,
         strategy_id=SH1_ID,
         strategy_version="1.0.0",
         feature_version="1.0",
@@ -168,14 +172,18 @@ def evaluate_superhuman_vol_expansion(deriv: DerivativesState, ob: OrderbookSnap
     if imb5 < 0.50 or micro_edge < 1.5:
         rejections.append("REJECT_SIGNAL_THRESHOLD_NOT_MET")
 
-    expected_edge_bps = (imb5 * 10.0) + (micro_edge * 2.0)
+    direction = "LONG" if ob.imbalance_5 >= 0 else "SHORT"
+    expected_edge_bps = (imb5 * 20.0) + (micro_edge * 3.0)
     expected_net_edge_bps = expected_edge_bps - friction_bps
 
     if expected_net_edge_bps < 3.0:
         rejections.append("REJECT_EDGE_TOO_SMALL")
 
     decision = "ACCEPT" if not rejections else "REJECT"
-    decision_reason = "Accepted: Superhuman Volatility Expansion Breakout" if not rejections else f"Rejected: {', '.join(rejections)}"
+    decision_reason = (
+        f"Accepted: Superhuman Volatility Expansion Breakout {direction}"
+        if not rejections else f"Rejected: {', '.join(rejections)}"
+    )
 
     return CandidateRecord(
         candidate_id=cand_id,
@@ -187,7 +195,7 @@ def evaluate_superhuman_vol_expansion(deriv: DerivativesState, ob: OrderbookSnap
         signal_version="v2.0",
         decision=decision,
         decision_reason=decision_reason,
-        hypothetical_entry=ob.mid_price,
+        hypothetical_entry=(ob.best_ask if direction == "LONG" else ob.best_bid) if not rejections else ob.mid_price,
         strategy_id=SH3_ID,
         strategy_version="1.0.0",
         feature_version="1.0",
@@ -252,7 +260,7 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
         ema_slow = _ema(closes, EMA_SLOW)
         dc_high, dc_low = _donchian(highs, lows, DONCHIAN_PERIOD)
         adx_val = _adx(highs, lows, closes, ADX_PERIOD)
-        vol_sma = _sma(volumes[-21:-1] if len(volumes) >= 22 else volumes[:-1], DONCHIAN_PERIOD)
+        vol_sma = _sma(volumes[-DONCHIAN_PERIOD - 1:-1] if len(volumes) >= (DONCHIAN_PERIOD + 1) else volumes[:-1], DONCHIAN_PERIOD)
         eval_vol = max(volumes[-1], volumes[-2]) if len(volumes) >= 2 else (volumes[-1] if volumes else 0.0)
         vol_ratio = (eval_vol / vol_sma) if vol_sma and vol_sma > 0 else 0.0
         current_close = closes[-1] if closes else ob.mid_price

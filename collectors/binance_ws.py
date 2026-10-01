@@ -152,13 +152,15 @@ class BinanceStreamCollector:
 
             # 5. Global Liquidation Stream (!forceOrder@arr)
             elif "forceorder" in stream_lower:
-                order_data = payload.get("o", {})
-                symbol = (order_data.get("s") or "").upper()
-                price = float(order_data.get("p", 0.0))
-                qty = float(order_data.get("q", 0.0))
-                notional = price * qty
-                if symbol in derivatives_engine.trackers and notional > 0:
-                    derivatives_engine.trackers[symbol].record_liquidation(notional)
+                orders = payload if isinstance(payload, list) else [payload]
+                for item in orders:
+                    order_data = item.get("o", item) if isinstance(item, dict) else {}
+                    symbol = (order_data.get("s") or "").upper()
+                    price = float(order_data.get("p", 0.0))
+                    qty = float(order_data.get("q", 0.0))
+                    notional = price * qty
+                    if symbol in derivatives_engine.trackers and notional > 0:
+                        derivatives_engine.trackers[symbol].record_liquidation(notional)
         except Exception as e:
             logger.error(f"Error handling message: {e}")
 
