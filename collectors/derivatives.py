@@ -116,7 +116,7 @@ class SymbolDerivativesTracker:
 
         if len(self.recent_cvd_notionals) > 60:
             self.recent_cvd_notionals.pop(0)
-        if len(self.recent_closes) > 200:
+        if len(self.recent_closes) > 500:
             self.recent_closes.pop(0)
             self.recent_highs.pop(0)
             self.recent_lows.pop(0)
@@ -268,9 +268,9 @@ class DerivativesEngine:
         return {}
 
     async def warmup_historical_candles(self, symbol: str):
-        """Fetches last 100 1m candles from Binance REST to warm up EMA, Donchian, ADX."""
+        """Fetches last 300 1m candles from Binance REST to warm up 15m aggregated EMA, ADX, and pullbacks."""
         try:
-            url = f"{settings.BINANCE_FUTURES_REST}/fapi/v1/klines?symbol={symbol}&interval=1m&limit=100"
+            url = f"{settings.BINANCE_FUTURES_REST}/fapi/v1/klines?symbol={symbol}&interval=1m&limit=300"
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.get(url)
                 if resp.status_code == 200:

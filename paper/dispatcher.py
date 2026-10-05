@@ -38,9 +38,9 @@ STRATEGY_PROFILES = {
         "leverage": 5,
     },
     "STRAT_ORDERBOOK_MOMENTUM_V1": {
-        "sl_pct": 0.40,
-        "tp_pct": 0.60,
-        "max_hold_ms": 30 * 60 * 1000,  # 30 minutes
+        "sl_pct": 0.45,
+        "tp_pct": 0.80,
+        "max_hold_ms": 20 * 60 * 1000,  # 20 minutes
         "leverage": 5,
     },
     "STRAT_LIQUIDATION_FADER_V1": {
@@ -68,15 +68,15 @@ STRATEGY_PROFILES = {
         "leverage": 5,
     },
     "STRAT_SWING_MOMENTUM_V1": {
-        "sl_pct": 1.00,
-        "tp_pct": 2.00,
-        "max_hold_ms": 4 * 3600 * 1000,  # 4 hours
+        "sl_pct": 0.60,
+        "tp_pct": 1.20,
+        "max_hold_ms": 120 * 60 * 1000,  # 2 hours
         "leverage": 5,
     },
     "STRAT_SUPERHUMAN_SWING_V1": {
-        "sl_pct": 1.00,
-        "tp_pct": 2.00,
-        "max_hold_ms": 4 * 3600 * 1000,  # 4 hours
+        "sl_pct": 0.60,
+        "tp_pct": 1.20,
+        "max_hold_ms": 120 * 60 * 1000,  # 2 hours
         "leverage": 5,
     },
 }

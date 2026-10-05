@@ -1,28 +1,23 @@
-"""Strategy 4: Intraday Trend & Swing Momentum (S4 — QUANT Desk).
+"""Strategy 4: Multi-Timeframe 15m Trend & EMA-Pullback (S4 — QUANT Desk).
 
 Hypothesis:
-When price breaks above/below the 20-period Donchian channel while EMA_20 is aligned
-with EMA_50 (trend filter) AND volume expands above the 20-period average AND ADX >= 22
-(confirming directional strength), the move has momentum to sustain 1.5% drift within
-the next 4 hours.
-
-This strategy is designed to capture the 15m/1h chart swings the user observes visually
-but that S1/S2/S3 cannot catch because they focus on funding cycles, book micro-structure,
-and liquidation cascades respectively.
+In established trending regimes on 15m aggregated bars (EMA_FAST > EMA_SLOW with ADX >= 18),
+entering on shallow mean-reversion pullbacks towards the 15m Fast EMA when Cumulative Volume Delta (CVD)
+confirms absorption support/resistance produces high-expectancy trend continuations with favorable reward-to-risk.
 
 Regime constraints:
-Allowed in ALL regimes EXCEPT DATA_DEGRADED.
-Rationale: Trending, ranging breakouts, and high-vol moves are all valid swing contexts.
+Allowed in TRENDING_UP, TRENDING_DOWN, RANGE, and HIGH_VOLATILITY.
+Explicitly rejected in DATA_DEGRADED.
 
 Data source:
-- tracker.recent_closes  : List[float] — 1m close prices, up to 200 items
+- tracker.recent_closes  : List[float] — 1m close prices, up to 500 items
 - tracker.recent_highs   : List[float] — 1m high prices
 - tracker.recent_lows    : List[float] — 1m low prices
 - tracker.recent_volumes : List[float] — 1m volumes
 """
 import math
 import logging
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from core.contracts import DerivativesState, OrderbookSnapshot, CandidateRecord
 from core.clock import now_utc_ms, ms_to_iso
@@ -30,28 +25,55 @@ from core.clock import now_utc_ms, ms_to_iso
 logger = logging.getLogger("swing_momentum")
 
 STRATEGY_ID = "STRAT_SWING_MOMENTUM_V1"
-VERSION      = "1.0.0"
-FEATURE_VERSION   = "1.0"
-PARAMETER_VERSION = "1.0"
+VERSION      = "2.0.0"
+FEATURE_VERSION   = "2.0"
+PARAMETER_VERSION = "2.0"
 
-# Entry thresholds (Intraday hourly swing horizon, filtering 20m noise chop)
-EMA_FAST  = 30
-EMA_SLOW  = 90
-DONCHIAN_PERIOD   = 60
-ADX_PERIOD        = 14
-VOLUME_RATIO_MIN  = 1.30    # Volume must be >= 1.30× the 60-period SMA of volume
+# Multi-Timeframe Parameters (15m Aggregated Bars)
+BAR_SIZE_MINUTES  = 15
+EMA_FAST_15M      = 6    # 6 x 15m = 1.5 hours
+EMA_SLOW_15M      = 16   # 16 x 15m = 4 hours
+ADX_PERIOD_15M    = 8    # 8 x 15m = 2 hours
+MIN_15M_BARS      = 12   # Need at least 3 hours of 1m data (12 x 15m bars)
 
-# Execution
-TP_PCT        = 1.50
-SL_PCT        = 0.75
-MAX_HOLD_MS   = 4 * 3600 * 1000   # 4 hours
+# Execution Risk Parameters
+TP_PCT        = 1.20   # 1.20% Take-Profit
+SL_PCT        = 0.60   # 0.60% Stop-Loss (2:1 Reward:Risk)
+MAX_HOLD_MS   = 2 * 3600 * 1000   # 2 hours
 
 REJECTED_REGIMES = {"DATA_DEGRADED"}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Technical Indicator Helpers
+# Multi-Timeframe Resampling & Technical Indicators
 # ──────────────────────────────────────────────────────────────────────────────
+
+def resample_1m_to_15m(
+    closes: List[float], highs: List[float], lows: List[float], volumes: List[float],
+    bar_size: int = 15
+) -> Tuple[List[float], List[float], List[float], List[float]]:
+    """Resamples 1-minute arrays into aggregated bar_size (15m) OHLCV series."""
+    n = len(closes)
+    if n < bar_size:
+        return [], [], [], []
+
+    remainder = n % bar_size
+    start_idx = remainder  # Align to full complete historical buckets
+
+    c_15m, h_15m, l_15m, v_15m = [], [], [], []
+    for i in range(start_idx, n, bar_size):
+        chunk_c = closes[i:i + bar_size]
+        chunk_h = highs[i:i + bar_size]
+        chunk_l = lows[i:i + bar_size]
+        chunk_v = volumes[i:i + bar_size]
+        if chunk_c:
+            c_15m.append(chunk_c[-1])
+            h_15m.append(max(chunk_h))
+            l_15m.append(min(chunk_l))
+            v_15m.append(sum(chunk_v))
+
+    return c_15m, h_15m, l_15m, v_15m
+
 
 def _ema(prices: List[float], period: int) -> Optional[float]:
     """Returns the current EMA value for the given period. Returns None if insufficient data."""
@@ -64,29 +86,12 @@ def _ema(prices: List[float], period: int) -> Optional[float]:
     return ema
 
 
-def _donchian(highs: List[float], lows: List[float], period: int):
-    """Returns (dc_high, dc_low) of the most recent `period` bars (excluding current)."""
-    if len(highs) < period or len(lows) < period:
-        return None, None
-    window_h = highs[-period - 1:-1]   # exclude current bar
-    window_l = lows[-period - 1:-1]
-    if not window_h or not window_l:
-        return None, None
-    return max(window_h), min(window_l)
-
-
-def _sma(values: List[float], period: int) -> Optional[float]:
-    if len(values) < period:
-        return None
-    return sum(values[-period:]) / period
-
-
 def _true_range(high: float, low: float, prev_close: float) -> float:
     return max(high - low, abs(high - prev_close), abs(low - prev_close))
 
 
-def _adx(highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> Optional[float]:
-    """Wilder-smoothed ADX. Returns float or None if insufficient data."""
+def _adx(highs: List[float], lows: List[float], closes: List[float], period: int = 8) -> Optional[float]:
+    """Wilder-smoothed ADX for 15m aggregated bars."""
     required = period * 2 + 1
     if len(closes) < required:
         return None
@@ -106,7 +111,6 @@ def _adx(highs: List[float], lows: List[float], closes: List[float], period: int
         minus_dm_list.append(minus_dm)
         tr_list.append(tr)
 
-    # Wilder smoothing seed
     smoothed_tr       = sum(tr_list[:period])
     smoothed_plus_dm  = sum(plus_dm_list[:period])
     smoothed_minus_dm = sum(minus_dm_list[:period])
@@ -129,7 +133,6 @@ def _adx(highs: List[float], lows: List[float], closes: List[float], period: int
     if len(dx_list) < period:
         return None
 
-    # Wilder smooth DX -> ADX
     adx = sum(dx_list[:period]) / period
     for dx in dx_list[period:]:
         adx = (adx * (period - 1) + dx) / period
@@ -145,13 +148,10 @@ def evaluate_swing_momentum(
     ob: OrderbookSnapshot,
     tracker,                  # DerivativesTracker — provides raw list attributes
 ) -> CandidateRecord:
-    """Evaluates the S4 Intraday Trend & Swing Momentum strategy."""
+    """Evaluates the S4 Multi-Timeframe 15m Trend & EMA-Pullback strategy."""
     now_ms = now_utc_ms()
-    candidate_id = f"CAND-SWING-{deriv.symbol}-{now_ms}"
+    candidate_id = f"CAND-SWING-15M-{deriv.symbol}-{now_ms}"
     rejection_codes: List[str] = []
-
-    # 0. Parking Gate: Deprecate 1m Donchian Breakout chasing (Audited negative expectancy)
-    rejection_codes.append("REJECT_DEPRECATED_1M_BREAKOUT")
 
     # 1. Regime gate (only reject DATA_DEGRADED)
     regime = deriv.regime
@@ -162,111 +162,103 @@ def evaluate_swing_momentum(
     if deriv.quarantine_state != "NORMAL":
         rejection_codes.append("REJECT_DATA_STALE")
 
-    # 3. Pull raw price lists from the tracker
+    # 3. Pull raw 1m price lists from tracker
     closes  = list(getattr(tracker, "recent_closes",  []) or [])
     highs   = list(getattr(tracker, "recent_highs",   []) or [])
     lows    = list(getattr(tracker, "recent_lows",    []) or [])
     volumes = list(getattr(tracker, "recent_volumes", []) or [])
 
-    MIN_BARS = EMA_SLOW + ADX_PERIOD + 5   # Need enough history for all indicators
-    if len(closes) < MIN_BARS or len(highs) < MIN_BARS or len(lows) < MIN_BARS:
+    # Resample to 15m bars
+    c_15m, h_15m, l_15m, v_15m = resample_1m_to_15m(closes, highs, lows, volumes, bar_size=BAR_SIZE_MINUTES)
+
+    if len(c_15m) < MIN_15M_BARS:
         rejection_codes.append("REJECT_INSUFFICIENT_DATA")
         direction = None
-        ema_fast = ema_slow = dc_high = dc_low = vol_ratio = adx_val = None
+        ema_fast = ema_slow = adx_val = None
     else:
-        # 4. Compute EMA_20 and EMA_50
-        ema_fast = _ema(closes, EMA_FAST)
-        ema_slow = _ema(closes, EMA_SLOW)
-
-        # 5. Donchian Channel (20-period, excluding current bar)
-        dc_high, dc_low = _donchian(highs, lows, DONCHIAN_PERIOD)
-
-        # 6. Volume expansion check
-        # Use max of latest completed bar and current in-progress bar so evaluation timing within minute doesn't penalize
-        vol_sma = _sma(volumes[-DONCHIAN_PERIOD - 1:-1] if len(volumes) >= (DONCHIAN_PERIOD + 1) else volumes[:-1], DONCHIAN_PERIOD)
-        eval_vol = max(volumes[-1], volumes[-2]) if len(volumes) >= 2 else (volumes[-1] if volumes else 0.0)
-        vol_ratio = (eval_vol / vol_sma) if vol_sma and vol_sma > 0 else 0.0
-
-        # 7. ADX directional strength
-        adx_val = _adx(highs, lows, closes, ADX_PERIOD)
+        # 4. Compute 15m Multi-Timeframe Trend Filters
+        ema_fast = _ema(c_15m, EMA_FAST_15M)
+        ema_slow = _ema(c_15m, EMA_SLOW_15M)
+        adx_val  = _adx(h_15m, l_15m, c_15m, ADX_PERIOD_15M)
 
         current_close = closes[-1] if closes else ob.mid_price
+        recent_15m_lows = lows[-30:] if len(lows) >= 30 else lows
+        recent_15m_highs = highs[-30:] if len(highs) >= 30 else highs
 
-        # 8. Direction determination
         trend_bull = (ema_fast is not None and ema_slow is not None and ema_fast > ema_slow)
         trend_bear = (ema_fast is not None and ema_slow is not None and ema_fast < ema_slow)
-        broke_dc_high = (dc_high is not None and current_close > dc_high)
-        broke_dc_low  = (dc_low  is not None and current_close < dc_low)
+        adx_ok = (adx_val is not None and adx_val >= 18.0)
 
-        long_setup  = trend_bull and broke_dc_high
-        short_setup = trend_bear and broke_dc_low
+        # 5. Pullback + Absorption Setup
+        # Long Setup: Uptrend -> Price tested Fast EMA support -> Reclaiming above EMA
+        pullback_tested_long = (ema_fast is not None and min(recent_15m_lows) <= ema_fast * 1.003)
+        reclaiming_long = (ema_fast is not None and current_close >= ema_fast * 0.9995)
+        long_setup = trend_bull and pullback_tested_long and reclaiming_long
 
-        # Volume confirmation
-        vol_ok = (vol_ratio >= VOLUME_RATIO_MIN) if vol_ratio else False
+        # Short Setup: Downtrend -> Price rallied to Fast EMA resistance -> Rejecting below EMA
+        pullback_tested_short = (ema_fast is not None and max(recent_15m_highs) >= ema_fast * 0.997)
+        rejecting_short = (ema_fast is not None and current_close <= ema_fast * 1.0005)
+        short_setup = trend_bear and pullback_tested_short and rejecting_short
 
-        # ADX confirmation
-        adx_ok = (adx_val is not None and adx_val >= 22.0)
-
+        # CVD flow & Orderbook confirmation
         cvd_z = getattr(deriv, "cvd_notional_usd_zscore", 0.0)
-        cvd_ok = (cvd_z >= 0.30) if long_setup else ((cvd_z <= -0.30) if short_setup else False)
+        cvd_ok = (cvd_z >= 0.20) if long_setup else ((cvd_z <= -0.20) if short_setup else False)
+        book_ok = (ob.imbalance_5 >= -0.20) if long_setup else ((ob.imbalance_5 <= 0.20) if short_setup else False)
 
         direction = None
         if long_setup or short_setup:
-            if not vol_ok:
-                rejection_codes.append("REJECT_LOW_VOLUME_EXPANSION")
             if not adx_ok:
                 rejection_codes.append("REJECT_LOW_ADX_STRENGTH")
             if not cvd_ok:
                 rejection_codes.append("REJECT_CVD_DIRECTION_MISMATCH")
-            if vol_ok and adx_ok and cvd_ok:
+            if not book_ok:
+                rejection_codes.append("REJECT_COUNTER_TREND_BOOK_TRAP")
+            if adx_ok and cvd_ok and book_ok:
                 direction = "LONG" if long_setup else "SHORT"
         else:
             rejection_codes.append("REJECT_SIGNAL_THRESHOLD_NOT_MET")
 
-    # 9. Edge estimation: Swing moves typically 20-80 bps per hour; we target 1.5% (150 bps) TP
-    #    Conservative estimate: EMA alignment + breakout = ~40-80 bps expected drift first 30m
+    # 6. Edge calculation
     if direction is not None:
-        adx_factor = (adx_val / 22.0) if adx_val else 1.0
-        expected_edge_bps = 45.0 * adx_factor
+        adx_factor = (adx_val / 20.0) if adx_val else 1.0
+        expected_edge_bps = 50.0 * adx_factor
     else:
         expected_edge_bps = 0.0
 
-    friction_bps = ob.spread_bps + 10.0 + 2.0   # spread + taker 10 bps + slip
+    friction_bps = ob.spread_bps + 8.0 + 2.0  # Taker 8 bps + spread + 2 bps slip
     expected_net_edge_bps = expected_edge_bps - friction_bps
 
-    if direction is not None and expected_net_edge_bps < 5.0:
+    if direction is not None and expected_net_edge_bps < 4.0:
         rejection_codes.append("REJECT_EDGE_TOO_SMALL")
-        direction = None   # invalidate direction
+        direction = None
 
-    # 10. Final decision
+    # 7. Final decision
     is_accepted = (len(rejection_codes) == 0 and direction is not None)
     decision = "ACCEPT" if is_accepted else "REJECT"
 
     if is_accepted:
         hypothetical_entry = ob.best_ask if direction == "LONG" else ob.best_bid
         decision_reason = (
-            f"S4 {direction} swing breakout: "
-            f"EMA_fast={ema_fast:.2f}, EMA_slow={ema_slow:.2f}, "
-            f"DC_high={dc_high:.2f}, DC_low={dc_low:.2f}, "
-            f"vol_ratio={vol_ratio:.2f}x, ADX={adx_val:.1f}, "
+            f"S4 15m {direction} EMA-pullback: "
+            f"EMA_15m_fast={ema_fast:.2f}, EMA_15m_slow={ema_slow:.2f}, "
+            f"ADX_15m={adx_val:.1f}, CVD_z={cvd_z:+.2f}, "
             f"net_edge={expected_net_edge_bps:.1f} bps"
         )
     else:
         hypothetical_entry = ob.mid_price
         decision_reason = f"Rejected: {', '.join(rejection_codes)}"
 
-    signal_score = min(100.0, max(0.0, (expected_edge_bps / 60.0) * 100.0)) if is_accepted else 0.0
+    signal_score = min(100.0, max(0.0, (expected_edge_bps / 50.0) * 100.0)) if is_accepted else 0.0
 
-    # Runtime currency (required by CandidateRecord)
     from config.currency import currency_service
     return CandidateRecord(
         candidate_id=candidate_id,
         timestamp_ms=now_ms,
         symbol=deriv.symbol,
         origin="QUANT",
-        engine_version="v2.0-S4",
-        model_version="rule-based-swing-v1",
-        signal_version="v1.0",
+        engine_version="v2.0-S4-15M",
+        model_version="rule-based-15m-pullback",
+        signal_version="v2.0",
         decision=decision,
         decision_reason=decision_reason,
         hypothetical_entry=hypothetical_entry,
