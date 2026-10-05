@@ -151,6 +151,54 @@ class PaperEngine:
         self._positions: Dict[str, PaperPosition] = {}
         self._lock = asyncio.Lock()
         sqlite_store.init_paper_tables()
+        self.hydrate_from_db()
+
+    def hydrate_from_db(self):
+        """Hydrates in-memory positions from SQLite database on startup or restart."""
+        try:
+            rows = sqlite_store.get_paper_positions(limit=1000)
+            for r in rows:
+                pid = r.get("position_id")
+                if pid and pid not in self._positions:
+                    pos = PaperPosition(
+                        position_id=pid,
+                        symbol=r["symbol"],
+                        direction=r["direction"],
+                        notional_usdt=float(r.get("notional_usdt") or 0.0),
+                        leverage=int(r.get("leverage") or DEFAULT_LEVERAGE),
+                        entry_price=float(r.get("entry_price") or 0.0),
+                        entry_slippage_bps=float(r.get("entry_slippage_bps") or 0.0),
+                        entry_fee_usdt=float(r.get("entry_fee_usdt") or 0.0),
+                        margin_usdt=float(r.get("margin_usdt") or 0.0),
+                        mark_price=float(r.get("mark_price") or r.get("entry_price") or 0.0),
+                        unrealised_pnl=float(r.get("unrealised_pnl") or 0.0),
+                        funding_paid_usdt=float(r.get("funding_paid_usdt") or 0.0),
+                        total_fees_usdt=float(r.get("total_fees_usdt") or 0.0),
+                        exit_price=float(r["exit_price"]) if r.get("exit_price") is not None else None,
+                        exit_slippage_bps=float(r["exit_slippage_bps"]) if r.get("exit_slippage_bps") is not None else None,
+                        exit_fee_usdt=float(r["exit_fee_usdt"]) if r.get("exit_fee_usdt") is not None else None,
+                        realised_pnl=float(r["realised_pnl"]) if r.get("realised_pnl") is not None else None,
+                        exit_reason=r.get("exit_reason"),
+                        status=r.get("status", "OPEN"),
+                        opened_at_ms=int(r.get("opened_at_ms") or 0),
+                        closed_at_ms=int(r["closed_at_ms"]) if r.get("closed_at_ms") is not None else None,
+                        last_funding_at_ms=int(r.get("last_funding_at_ms") or 0),
+                        stop_loss_price=float(r["stop_loss_price"]) if r.get("stop_loss_price") is not None else None,
+                        take_profit_price=float(r["take_profit_price"]) if r.get("take_profit_price") is not None else None,
+                        strategy_id=r.get("strategy_id", "STRAT_UNKNOWN"),
+                        candidate_id=r.get("candidate_id", ""),
+                        signal_score=float(r.get("signal_score") or 0.0),
+                        expected_edge_bps=float(r.get("expected_edge_bps") or 0.0),
+                        regime=r.get("regime", "RANGE"),
+                        max_hold_ms=int(r["max_hold_ms"]) if r.get("max_hold_ms") is not None else None,
+                        risk_loss_usd=float(r.get("risk_loss_usd") or 0.0),
+                        stop_loss_distance_usd=float(r.get("stop_loss_distance_usd") or 0.0),
+                        desk=r.get("desk", "QUANT").upper(),
+                    )
+                    self._positions[pos.position_id] = pos
+            logger.info("Hydrated %d positions from SQLite into memory.", len(self._positions))
+        except Exception as e:
+            logger.warning("Failed to hydrate positions from SQLite: %s", e)
 
     # ── Public API ─────────────────────────────────────────────────────────
 
