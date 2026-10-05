@@ -150,6 +150,9 @@ def evaluate_swing_momentum(
     candidate_id = f"CAND-SWING-{deriv.symbol}-{now_ms}"
     rejection_codes: List[str] = []
 
+    # 0. Parking Gate: Deprecate 1m Donchian Breakout chasing (Audited negative expectancy)
+    rejection_codes.append("REJECT_DEPRECATED_1M_BREAKOUT")
+
     # 1. Regime gate (only reject DATA_DEGRADED)
     regime = deriv.regime
     if regime in REJECTED_REGIMES:

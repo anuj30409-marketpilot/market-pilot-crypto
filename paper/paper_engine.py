@@ -428,12 +428,26 @@ class PaperEngine:
         hit = False
         reason = ""
         gap = False
+
+        # Dynamic Breakeven Ratchet (+75 bps floating profit ratchets SL to Entry + Friction)
         if pos.direction == "LONG":
+            be_target = pos.entry_price * 1.0012  # Entry + 12 bps friction
+            if mark >= pos.entry_price * 1.0075 and (not pos.stop_loss_price or pos.stop_loss_price < be_target):
+                pos.stop_loss_price = be_target
+                sqlite_store.upsert_paper_position(pos.to_dict())
+                logger.info(f"[PAPER RATCHET BE] {pos.symbol} LONG SL raised to lock in BE+friction @ {pos.stop_loss_price:.2f}")
+
             if pos.stop_loss_price and mark <= pos.stop_loss_price:
                 hit, reason, gap = True, "STOP_LOSS", True
             elif pos.take_profit_price and mark >= pos.take_profit_price:
                 hit, reason, gap = True, "TAKE_PROFIT", False
         else:
+            be_target = pos.entry_price * 0.9988  # Entry - 12 bps friction
+            if mark <= pos.entry_price * 0.9925 and (not pos.stop_loss_price or pos.stop_loss_price > be_target):
+                pos.stop_loss_price = be_target
+                sqlite_store.upsert_paper_position(pos.to_dict())
+                logger.info(f"[PAPER RATCHET BE] {pos.symbol} SHORT SL lowered to lock in BE+friction @ {pos.stop_loss_price:.2f}")
+
             if pos.stop_loss_price and mark >= pos.stop_loss_price:
                 hit, reason, gap = True, "STOP_LOSS", True
             elif pos.take_profit_price and mark <= pos.take_profit_price:

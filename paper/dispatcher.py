@@ -23,7 +23,8 @@ ESTIMATED_ROUNDTRIP_FRICTION_PCT = 0.13  # 13 bps (fees + slippage)
 MAX_GROSS_NOTIONAL_PCT = 200.0  # 200% gross exposure max ($20,000 on $10k)
 MAX_NET_DIRECTIONAL_PCT = 100.0  # 100% net long/short max ($10,000 on $10k)
 MAX_CONCURRENT_POSITIONS = 4
-MAX_POSITIONS_PER_SYMBOL = 2
+MAX_POSITIONS_PER_SYMBOL = 1   # Strict Asset Mutex: Max 1 position per asset across ALL desks
+MAX_POSITION_NOTIONAL_USDT = 2500.0  # 25% max equity notional cap to avoid fee explosion
 DAILY_DRAWDOWN_LIMIT_PCT = 2.0  # 2.0% daily DD circuit breaker ($200 on $10k)
 CONSECUTIVE_LOSS_LIMIT = 3
 COOLDOWN_AFTER_LOSSES_MS = 4 * 3600 * 1000  # 4 hours
@@ -199,8 +200,9 @@ class PaperDispatcher:
         # Notional = risk_budget / total_adverse_move_pct
         notional_usdt = risk_budget_usd / max(0.001, total_adverse_move_pct)
 
-        # Guardrails: Min $50, Max 50% of account equity
-        notional_usdt = max(50.0, min(notional_usdt, equity_usd * 0.50))
+        # Guardrails: Min $50, Max 25% of account equity or MAX_POSITION_NOTIONAL_USDT
+        max_allowed_notional = min(MAX_POSITION_NOTIONAL_USDT, equity_usd * 0.25)
+        notional_usdt = max(50.0, min(notional_usdt, max_allowed_notional))
         return notional_usdt, sl_pct, tp_pct, max_hold_ms
 
     def infer_direction(self, candidate: CandidateRecord) -> str:
@@ -262,10 +264,11 @@ class PaperDispatcher:
         # Determine desk: QUANT or SUPERHUMAN
         desk = "SUPERHUMAN" if getattr(candidate, "origin", "QUANT").upper() == "SUPERHUMAN" else "QUANT"
 
-        # 1. Fetch current portfolio state for this specific desk
+        # 1. Fetch current portfolio state
         summary = paper_engine.get_summary(desk=desk)
         account_equity = summary["capital_usdt"] + summary["net_pnl"]
-        open_positions = sqlite_store.get_paper_positions(status="OPEN", desk=desk)
+        # Query open positions across ALL desks for global concurrency & collision protection
+        global_open_positions = sqlite_store.get_paper_positions(status="OPEN", desk="ALL")
         closed_positions = sqlite_store.get_paper_positions(status="CLOSED", desk=desk, limit=50)
 
         # 2. Get live orderbook
@@ -287,12 +290,12 @@ class PaperDispatcher:
 
         direction = self.infer_direction(candidate)
 
-        # 4. Check Portfolio-level Risk Limits
+        # 4. Check Portfolio-level Risk Limits (Global Cross-Desk Check)
         allowed, risk_reason = self.risk_controller.check_portfolio_limits(
             symbol=symbol,
             direction=direction,
             candidate_notional=notional_usdt,
-            open_positions=open_positions,
+            open_positions=global_open_positions,
             closed_positions=closed_positions,
             account_equity=account_equity,
             now_ms=now_ms,

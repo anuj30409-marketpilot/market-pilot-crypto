@@ -66,9 +66,17 @@ def evaluate_funding_reversion(
         deriv.distance_to_next_funding_mins <= 240
     )
 
+    cvd_z = getattr(deriv, "cvd_notional_usd_zscore", 0.0)
+    if is_short and cvd_z >= 0.8:
+        rejection_codes.append("REJECT_OPPOSING_CVD_MOMENTUM")
+        is_short = False
+    elif is_long and cvd_z <= -0.8:
+        rejection_codes.append("REJECT_OPPOSING_CVD_MOMENTUM")
+        is_long = False
+
     direction = "LONG" if is_long else ("SHORT" if is_short else None)
 
-    if not direction:
+    if not direction and not rejection_codes:
         rejection_codes.append("REJECT_SIGNAL_THRESHOLD_NOT_MET")
 
     # 4. Edge and Cost Calculation

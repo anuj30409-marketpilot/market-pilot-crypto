@@ -233,6 +233,8 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
     now_ms = now_utc_ms()
     cand_id = f"CAND-SH4-{deriv.symbol}-{now_ms}"
     rejections = []
+    # 0. Parking Gate: Deprecate 1m Donchian Breakout chasing (Audited negative expectancy)
+    rejections.append("REJECT_DEPRECATED_1M_BREAKOUT")
 
     spread_bps = ob.spread_bps
     friction_bps = 8.0 + spread_bps + 2.0

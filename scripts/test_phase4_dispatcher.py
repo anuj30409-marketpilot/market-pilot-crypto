@@ -53,11 +53,10 @@ async def run_phase4_tests():
             entry_price=mid_price
         )
         expected_risk_loss = notional * ((sl_pct / 100.0) + (0.13 / 100.0))
-        print(f"      Calculated notional: ${notional:.2f} (SL: {sl_pct}%, TP: {tp_pct}%)")
-        print(f"      Calculated dollar risk on stop out: ${expected_risk_loss:.2f}")
-        assert 20.0 <= expected_risk_loss <= 26.0, f"Risk loss ${expected_risk_loss} out of target bounds!"
+        assert notional <= 2500.0, f"Notional ${notional} exceeded max $2500 cap!"
+        assert expected_risk_loss <= 26.0, f"Risk loss ${expected_risk_loss} exceeded $26 risk budget target!"
         assert max_hold == 30 * 60 * 1000, "S2 max hold must be 30 minutes"
-        print("      [OK] Risk-as-loss position sizing verified.")
+        print("      [OK] Risk-as-loss position sizing and notional cap verified.")
 
         # 2. Test Portfolio Risk Controller Limits
         print("[2/4] Testing Portfolio Risk Boundaries & Circuit Breakers...")
