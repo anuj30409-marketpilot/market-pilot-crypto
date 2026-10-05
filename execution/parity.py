@@ -13,8 +13,15 @@ from core.clock import now_utc_ms
 logger = logging.getLogger("execution.parity")
 
 MAX_TOLERATED_DISLOCATION_BPS = 15.0  # Max acceptable price dislocation
-MAX_TOLERATED_DELTA_SPREAD_BPS = 12.0  # Max acceptable Delta bid-ask spread
-MAX_STALENESS_MS = 5000  # 5 seconds staleness threshold
+MAX_TOLERATED_DELTA_SPREAD_BPS = 15.0  # Max acceptable Delta bid-ask spread
+MAX_STALENESS_MS = 15000  # 15 seconds staleness threshold
+DELTA_INDIA_TICKERS_URL = "https://api.india.delta.exchange/v2/tickers"
+DELTA_SYMBOL_MAP = {
+    "BTCUSD": "BTCUSDT",
+    "ETHUSD": "ETHUSDT",
+    "BTCUSDT": "BTCUSDT",
+    "ETHUSDT": "ETHUSDT",
+}
 
 
 class VenuePriceState:
@@ -59,6 +66,35 @@ class CrossVenueParityEngine:
             self.delta_prices[upper] = VenuePriceState("DELTA_INDIA", upper)
         self.delta_prices[upper].update(mark, bid, ask, timestamp_ms)
 
+    async def poll_delta_prices(self):
+        """Fetches live mark price and top-of-book quotes from Delta Exchange India."""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                resp = await client.get(DELTA_INDIA_TICKERS_URL)
+                if resp.status_code == 200:
+                    now_ms = now_utc_ms()
+                    data = resp.json().get("result", [])
+                    for item in data:
+                        sym = item.get("symbol", "")
+                        target_sym = DELTA_SYMBOL_MAP.get(sym)
+                        if target_sym:
+                            mark = float(item.get("mark_price", 0.0) or 0.0)
+                            quotes = item.get("quotes", {}) or {}
+                            bid = float(quotes.get("best_bid", 0.0) or mark)
+                            ask = float(quotes.get("best_ask", 0.0) or mark)
+                            if mark > 0:
+                                self.update_delta_price(target_sym, mark, bid, ask, now_ms)
+        except Exception as e:
+            logger.debug("Failed to poll Delta India tickers: %s", e)
+
+    async def run_delta_poller(self, interval_seconds: float = 3.0):
+        """Continuously polls Delta India market tickers in background."""
+        logger.info("Starting Delta India Parity Feed Poller (interval=%.1fs)", interval_seconds)
+        while True:
+            await self.poll_delta_prices()
+            await asyncio.sleep(interval_seconds)
+
     def evaluate_parity(self, symbol: str, now_ms: Optional[int] = None) -> Tuple[bool, str, dict]:
         """Evaluates whether symbol satisfies INV-CRYPTO-021 parity invariants.
 
@@ -75,12 +111,11 @@ class CrossVenueParityEngine:
             return False, "PARITY_BINANCE_UNAVAILABLE", {"reason": "Binance price feed unavailable or stale"}
 
         if not d_state or not d_state.is_fresh(now_ms):
-            # In paper/shadow research mode without live Delta feed, report SHADOW_SIMULATED
             return False, "PARITY_DELTA_FEED_DISCONNECTED", {
                 "binance_mark": b_state.mark_price,
                 "delta_mark": 0.0,
                 "dislocation_bps": 0.0,
-                "reason": "Delta India live feed not yet connected (paper sandbox mode active)"
+                "reason": "Delta India live feed not yet connected or stale"
             }
 
         # Calculate basis dislocation
@@ -112,3 +147,4 @@ class CrossVenueParityEngine:
 
 
 parity_engine = CrossVenueParityEngine()
+

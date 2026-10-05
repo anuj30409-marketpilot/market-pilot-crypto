@@ -57,8 +57,8 @@ class BinanceStreamCollector:
             streams.append(f"{s}@aggtrade")
             streams.append(f"{s}@depth20@100ms")
             streams.append(f"{s}@markprice@1s")
-        # Global liquidation stream
-        streams.append("!forceorder@arr")
+        # Global liquidation stream (case-sensitive)
+        streams.append("!forceOrder@arr")
         stream_path = "/".join(streams)
         return f"{settings.BINANCE_FUTURES_WS}/stream?streams={stream_path}"
 
@@ -140,6 +140,14 @@ class BinanceStreamCollector:
                     if symbol in self.feed_statuses:
                         self.feed_statuses[symbol].mark_event(event_time_ms, received_ms)
                         sqlite_store.update_feed_status(self.feed_statuses[symbol])
+                    # Update Cross-Venue Parity Engine
+                    try:
+                        from execution.parity import parity_engine
+                        snap = self.orderbooks[symbol].get_snapshot()
+                        if snap.mid_price > 0:
+                            parity_engine.update_binance_price(symbol, snap.mid_price, snap.best_bid, snap.best_ask, event_time_ms)
+                    except Exception:
+                        pass
 
             # 4. Mark Price & Funding stream
             elif "@markprice" in stream_lower:
@@ -156,11 +164,12 @@ class BinanceStreamCollector:
                 for item in orders:
                     order_data = item.get("o", item) if isinstance(item, dict) else {}
                     symbol = (order_data.get("s") or "").upper()
-                    price = float(order_data.get("p", 0.0))
-                    qty = float(order_data.get("q", 0.0))
+                    price = float(order_data.get("p", 0.0) or order_data.get("ap", 0.0))
+                    qty = float(order_data.get("q", 0.0) or order_data.get("l", 0.0) or order_data.get("z", 0.0))
                     notional = price * qty
+                    event_time_ms = int(order_data.get("T", received_ms))
                     if symbol in derivatives_engine.trackers and notional > 0:
-                        derivatives_engine.trackers[symbol].record_liquidation(notional)
+                        derivatives_engine.trackers[symbol].record_liquidation(notional, event_time_ms)
         except Exception as e:
             logger.error(f"Error handling message: {e}")
 

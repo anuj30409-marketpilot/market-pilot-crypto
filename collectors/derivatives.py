@@ -41,6 +41,7 @@ class SymbolDerivativesTracker:
         
         # Liquidation and price history for regime classification
         self.liquidation_notional_60s: float = 0.0
+        self.liquidation_events: List[Tuple[int, float]] = []  # (timestamp_ms, notional_usd)
         self.recent_liquidation_notionals: List[float] = []
         self.recent_closes: List[float] = []
         self.recent_highs: List[float] = []
@@ -122,11 +123,19 @@ class SymbolDerivativesTracker:
             self.recent_lows.pop(0)
             self.recent_volumes.pop(0)
 
-    def record_liquidation(self, notional_usd: float):
-        self.liquidation_notional_60s += notional_usd
+    def record_liquidation(self, notional_usd: float, timestamp_ms: Optional[int] = None):
+        ts = timestamp_ms or now_utc_ms()
+        self.liquidation_events.append((ts, notional_usd))
         self.recent_liquidation_notionals.append(notional_usd)
-        if len(self.recent_liquidation_notionals) > 30:
+        if len(self.recent_liquidation_notionals) > 100:
             self.recent_liquidation_notionals.pop(0)
+
+    def get_liquidation_notional_60s(self, now_ms: Optional[int] = None) -> float:
+        now_ms = now_ms or now_utc_ms()
+        cutoff = now_ms - 60_000
+        self.liquidation_events = [(t, amt) for t, amt in self.liquidation_events if t >= cutoff]
+        self.liquidation_notional_60s = sum(amt for _, amt in self.liquidation_events)
+        return self.liquidation_notional_60s
 
     def compute_basis_bps(self) -> float:
         if self.index_price > 0:
@@ -168,12 +177,13 @@ class SymbolDerivativesTracker:
         now_ms = now_utc_ms()
         from core.regime import classify_regime
 
+        liq_60s = self.get_liquidation_notional_60s(now_ms)
         funding_z = self.compute_funding_zscore()
         cvd_z = self.compute_cvd_zscore()
         liq_intensity = self.compute_liquidation_intensity()
         
         oi_usd = self.open_interest * self.mark_price
-        liq_oi_impact = (self.liquidation_notional_60s / oi_usd) if oi_usd > 0 else 0.0
+        liq_oi_impact = (liq_60s / oi_usd) if oi_usd > 0 else 0.0
 
         dist_funding_mins = max(0, (self.next_funding_time_ms - now_ms) // 60000) if self.next_funding_time_ms > now_ms else 0
         annualized = self.funding_rate * (24.0 / max(1, self.funding_interval_hours)) * 365.0 * 100.0

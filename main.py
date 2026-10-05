@@ -1,4 +1,4 @@
-﻿"""Market Pilot Crypto Research Desk - Primary Process Runner.
+"""Market Pilot Crypto Research Desk - Primary Process Runner.
 
 Runs both the async WebSocket collector and FastAPI server inside a single
 event loop for maximum memory efficiency on 1 GB RAM cloud VMs.
@@ -33,6 +33,10 @@ async def run_services():
     # 4. Paper engine: charge real funding rates every 8 hours
     paper_funding_task = asyncio.create_task(paper_engine.run_funding_charger())
 
+    # 4b. Start Delta India Parity Feed Poller
+    from execution.parity import parity_engine
+    parity_task = asyncio.create_task(parity_engine.run_delta_poller(interval_seconds=3.0))
+
     # 5. Continuous Alpha Strategy Evaluator (evaluates S1, S2, S3 every 60s)
     evaluator_task = asyncio.create_task(strategy_evaluator.run_loop())
 
@@ -58,6 +62,7 @@ async def run_services():
         kline_rest_task,
         server_task,
         oi_task,
+        parity_task,
         paper_mark_task,
         paper_funding_task,
         evaluator_task,
