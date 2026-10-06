@@ -477,32 +477,58 @@ class PaperEngine:
         reason = ""
         gap = False
 
-        # Dynamic Breakeven Ratchet (+75 bps floating profit ratchets SL to Entry + Friction)
+        # Two-Tier Dynamic Ratchet:
+        # Tier 1 (+35 bps floating profit): Ratchet SL to Entry + 12 bps friction (locks Breakeven)
+        # Tier 2 (+70 bps floating profit): Ratchet SL to Entry + 35 bps (locks +23 bps net profit)
         if pos.direction == "LONG":
-            be_target = pos.entry_price * 1.0012  # Entry + 12 bps friction
-            if mark >= pos.entry_price * 1.0075 and (not pos.stop_loss_price or pos.stop_loss_price < be_target):
-                pos.stop_loss_price = be_target
+            t1_sl = pos.entry_price * 1.0012  # Entry + 12 bps friction
+            t2_sl = pos.entry_price * 1.0035  # Entry + 35 bps profit
+
+            # Tier 2 check (+70 bps)
+            if mark >= pos.entry_price * 1.0070 and (not pos.stop_loss_price or pos.stop_loss_price < t2_sl):
+                pos.stop_loss_price = t2_sl
                 sqlite_store.upsert_paper_position(pos.to_dict())
-                logger.info(f"[PAPER RATCHET BE] {pos.symbol} LONG SL raised to lock in BE+friction @ {pos.stop_loss_price:.2f}")
+                logger.info(f"[PAPER RATCHET TIER-2] {pos.symbol} LONG SL raised to lock in +35bps profit @ {pos.stop_loss_price:.2f}")
+            # Tier 1 check (+35 bps)
+            elif mark >= pos.entry_price * 1.0035 and (not pos.stop_loss_price or pos.stop_loss_price < t1_sl):
+                pos.stop_loss_price = t1_sl
+                sqlite_store.upsert_paper_position(pos.to_dict())
+                logger.info(f"[PAPER RATCHET TIER-1] {pos.symbol} LONG SL raised to lock in BE+friction @ {pos.stop_loss_price:.2f}")
 
             if pos.stop_loss_price and mark <= pos.stop_loss_price:
                 hit, reason, gap = True, "STOP_LOSS", True
             elif pos.take_profit_price and mark >= pos.take_profit_price:
                 hit, reason, gap = True, "TAKE_PROFIT", False
         else:
-            be_target = pos.entry_price * 0.9988  # Entry - 12 bps friction
-            if mark <= pos.entry_price * 0.9925 and (not pos.stop_loss_price or pos.stop_loss_price > be_target):
-                pos.stop_loss_price = be_target
+            t1_sl = pos.entry_price * 0.9988  # Entry - 12 bps friction
+            t2_sl = pos.entry_price * 0.9965  # Entry - 35 bps profit
+
+            # Tier 2 check (+70 bps short)
+            if mark <= pos.entry_price * 0.9930 and (not pos.stop_loss_price or pos.stop_loss_price > t2_sl):
+                pos.stop_loss_price = t2_sl
                 sqlite_store.upsert_paper_position(pos.to_dict())
-                logger.info(f"[PAPER RATCHET BE] {pos.symbol} SHORT SL lowered to lock in BE+friction @ {pos.stop_loss_price:.2f}")
+                logger.info(f"[PAPER RATCHET TIER-2] {pos.symbol} SHORT SL lowered to lock in +35bps profit @ {pos.stop_loss_price:.2f}")
+            # Tier 1 check (+35 bps short)
+            elif mark <= pos.entry_price * 0.9965 and (not pos.stop_loss_price or pos.stop_loss_price > t1_sl):
+                pos.stop_loss_price = t1_sl
+                sqlite_store.upsert_paper_position(pos.to_dict())
+                logger.info(f"[PAPER RATCHET TIER-1] {pos.symbol} SHORT SL lowered to lock in BE+friction @ {pos.stop_loss_price:.2f}")
 
             if pos.stop_loss_price and mark >= pos.stop_loss_price:
                 hit, reason, gap = True, "STOP_LOSS", True
             elif pos.take_profit_price and mark <= pos.take_profit_price:
                 hit, reason, gap = True, "TAKE_PROFIT", False
 
-        # Time-stop check based on strategy lifecycle (e.g. 30m, 60m, 8h)
-        if not hit and pos.max_hold_ms and (now_utc_ms() - pos.opened_at_ms) >= pos.max_hold_ms:
+        # Stagnation Decay Exit: If held >= 45m and floating move is stagnant (|floating bps| <= 15 bps)
+        elapsed_ms = now_utc_ms() - pos.opened_at_ms
+        if not hit and pos.max_hold_ms and pos.max_hold_ms >= 7200000:  # for 2h+ swing trades
+            if elapsed_ms >= 45 * 60 * 1000:
+                floating_bps = (mark - pos.entry_price) / pos.entry_price * 10000 if pos.direction == "LONG" else (pos.entry_price - mark) / pos.entry_price * 10000
+                if -15.0 <= floating_bps <= 15.0:
+                    hit, reason, gap = True, "STAGNATION_EXIT", False
+
+        # Time-stop check based on strategy lifecycle (e.g. 20m, 60m, 2h, 8h)
+        if not hit and pos.max_hold_ms and elapsed_ms >= pos.max_hold_ms:
             hit, reason, gap = True, "TIME_STOP", False
 
         if hit:

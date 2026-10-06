@@ -65,12 +65,20 @@ def evaluate_orderbook_momentum(
     queue_long  = (ob.imbalance_5 >= 0.30 and ob.microprice_edge_bps >= 0.8 and deriv.cvd_notional_usd_zscore >= 0.50)
     queue_short = (ob.imbalance_5 <= -0.30 and ob.microprice_edge_bps <= -0.8 and deriv.cvd_notional_usd_zscore <= -0.50)
 
-    is_long  = flow_long  or queue_long
-    is_short = flow_short or queue_short
+    # 5. Counter-Trend Macro Regime Guard
+    if flow_long or queue_long:
+        if deriv.regime == "TRENDING_DOWN":
+            rejection_codes.append("REJECT_COUNTER_TREND_REGIME")
+    if flow_short or queue_short:
+        if deriv.regime == "TRENDING_UP":
+            rejection_codes.append("REJECT_COUNTER_TREND_REGIME")
+
+    is_long  = (flow_long  or queue_long) and deriv.regime != "TRENDING_DOWN"
+    is_short = (flow_short or queue_short) and deriv.regime != "TRENDING_UP"
 
     direction = "LONG" if is_long else ("SHORT" if is_short else None)
 
-    if not direction:
+    if not direction and "REJECT_COUNTER_TREND_REGIME" not in rejection_codes:
         rejection_codes.append("REJECT_SIGNAL_THRESHOLD_NOT_MET")
 
     # Edge vs Execution Friction — incorporates both pathways

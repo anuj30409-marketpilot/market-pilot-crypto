@@ -159,6 +159,28 @@ class PortfolioRiskController:
             logger.critical("PORTFOLIO CIRCUIT BREAKER TRIGGERED: %s", self.circuit_breaker_reason)
             return False, f"RISK_REJECT_CIRCUIT_BREAKER_DAILY_DD ({self.circuit_breaker_reason})"
 
+        # 6. Differentiated Post-Exit Symbol Cooldown Check
+        recent_sym_closed = [p for p in closed_positions if p.get("symbol") == symbol.upper() and p.get("closed_at_ms")]
+        if recent_sym_closed:
+            latest = max(recent_sym_closed, key=lambda x: x.get("closed_at_ms", 0))
+            last_exit_time = latest.get("closed_at_ms", 0)
+            exit_reason = latest.get("exit_reason", "")
+
+            # Cooldown duration based on exit reason:
+            if exit_reason in ("TIME_STOP", "STAGNATION_EXIT"):
+                cooldown_ms = 30 * 60 * 1000  # 30 mins for dead chop / stagnation
+            elif exit_reason == "STOP_LOSS":
+                cooldown_ms = 20 * 60 * 1000  # 20 mins for adverse volatility
+            elif exit_reason == "TAKE_PROFIT":
+                cooldown_ms = 5 * 60 * 1000   # 5 mins for active runner
+            else:
+                cooldown_ms = 15 * 60 * 1000  # 15 mins default
+
+            elapsed_cooldown = now_ms - last_exit_time
+            if 0 <= elapsed_cooldown < cooldown_ms:
+                remaining_m = (cooldown_ms - elapsed_cooldown) / 60000
+                return False, f"RISK_REJECT_SYMBOL_COOLDOWN ({symbol} in {exit_reason} cooldown: {remaining_m:.1f}m remaining)"
+
         return True, "ACCEPT"
 
 

@@ -237,9 +237,13 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
     regime = deriv.regime
     cvd_z = deriv.cvd_notional_usd_zscore
 
-    # 1. Data feed health
+    # 1. Data feed health & Strict Regime Matrix
     if deriv.quarantine_state != "NORMAL":
         rejections.append("REJECT_DATA_STALE")
+
+    REJECTED_REGIMES = {"RANGE", "LOW_VOLATILITY", "FUNDING_EXTREME", "LIQUIDATION_EVENT", "DATA_DEGRADED"}
+    if regime in REJECTED_REGIMES:
+        rejections.append("REJECT_REGIME_UNFAVORABLE")
 
     # 2. Pull raw 1m lists
     closes  = list(getattr(tracker, "recent_closes",  []) or [])
@@ -264,9 +268,9 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
         recent_15m_lows = lows[-30:] if len(lows) >= 30 else lows
         recent_15m_highs = highs[-30:] if len(highs) >= 30 else highs
 
-        trend_bull = (ema_fast is not None and ema_slow is not None and ema_fast > ema_slow)
-        trend_bear = (ema_fast is not None and ema_slow is not None and ema_fast < ema_slow)
-        adx_ok = (adx_val is not None and adx_val >= 18.0)
+        trend_bull = (ema_fast is not None and ema_slow is not None and ema_fast > ema_slow and regime == "TRENDING_UP")
+        trend_bear = (ema_fast is not None and ema_slow is not None and ema_fast < ema_slow and regime == "TRENDING_DOWN")
+        adx_ok = (adx_val is not None and adx_val >= 22.0)
 
         # Pullback test & bounce
         pullback_tested_long = (ema_fast is not None and min(recent_15m_lows) <= ema_fast * 1.003)

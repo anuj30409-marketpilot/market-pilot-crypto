@@ -41,7 +41,7 @@ TP_PCT        = 1.20   # 1.20% Take-Profit
 SL_PCT        = 0.60   # 0.60% Stop-Loss (2:1 Reward:Risk)
 MAX_HOLD_MS   = 2 * 3600 * 1000   # 2 hours
 
-REJECTED_REGIMES = {"DATA_DEGRADED"}
+REJECTED_REGIMES = {"RANGE", "LOW_VOLATILITY", "FUNDING_EXTREME", "LIQUIDATION_EVENT", "DATA_DEGRADED"}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -153,10 +153,10 @@ def evaluate_swing_momentum(
     candidate_id = f"CAND-SWING-15M-{deriv.symbol}-{now_ms}"
     rejection_codes: List[str] = []
 
-    # 1. Regime gate (only reject DATA_DEGRADED)
+    # 1. Strict Directional Regime Gate (Reject Chop, Range, and Low Volatility)
     regime = deriv.regime
     if regime in REJECTED_REGIMES:
-        rejection_codes.append("REJECT_DATA_STALE")
+        rejection_codes.append("REJECT_REGIME_UNFAVORABLE")
 
     # 2. Feed Health
     if deriv.quarantine_state != "NORMAL":
@@ -185,24 +185,24 @@ def evaluate_swing_momentum(
         recent_15m_lows = lows[-30:] if len(lows) >= 30 else lows
         recent_15m_highs = highs[-30:] if len(highs) >= 30 else highs
 
-        trend_bull = (ema_fast is not None and ema_slow is not None and ema_fast > ema_slow)
-        trend_bear = (ema_fast is not None and ema_slow is not None and ema_fast < ema_slow)
-        adx_ok = (adx_val is not None and adx_val >= 18.0)
+        trend_bull = (ema_fast is not None and ema_slow is not None and ema_fast > ema_slow and regime == "TRENDING_UP")
+        trend_bear = (ema_fast is not None and ema_slow is not None and ema_fast < ema_slow and regime == "TRENDING_DOWN")
+        adx_ok = (adx_val is not None and adx_val >= 22.0)
 
         # 5. Pullback + Absorption Setup
-        # Long Setup: Uptrend -> Price tested Fast EMA support -> Reclaiming above EMA
+        # Long Setup: Uptrend + TRENDING_UP -> Price tested Fast EMA support -> Reclaiming above EMA
         pullback_tested_long = (ema_fast is not None and min(recent_15m_lows) <= ema_fast * 1.003)
         reclaiming_long = (ema_fast is not None and current_close >= ema_fast * 0.9995)
         long_setup = trend_bull and pullback_tested_long and reclaiming_long
 
-        # Short Setup: Downtrend -> Price rallied to Fast EMA resistance -> Rejecting below EMA
+        # Short Setup: Downtrend + TRENDING_DOWN -> Price rallied to Fast EMA resistance -> Rejecting below EMA
         pullback_tested_short = (ema_fast is not None and max(recent_15m_highs) >= ema_fast * 0.997)
         rejecting_short = (ema_fast is not None and current_close <= ema_fast * 1.0005)
         short_setup = trend_bear and pullback_tested_short and rejecting_short
 
-        # CVD flow & Orderbook confirmation
+        # CVD flow & Orderbook confirmation (>= 0.25σ absorption)
         cvd_z = getattr(deriv, "cvd_notional_usd_zscore", 0.0)
-        cvd_ok = (cvd_z >= 0.20) if long_setup else ((cvd_z <= -0.20) if short_setup else False)
+        cvd_ok = (cvd_z >= 0.25) if long_setup else ((cvd_z <= -0.25) if short_setup else False)
         book_ok = (ob.imbalance_5 >= -0.20) if long_setup else ((ob.imbalance_5 <= 0.20) if short_setup else False)
 
         direction = None
