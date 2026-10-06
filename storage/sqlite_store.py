@@ -504,6 +504,7 @@ class SQLiteStore:
         symbol: Optional[str] = None,
         status: Optional[str] = None,
         desk: Optional[str] = None,
+        version: Optional[str] = None,
         limit: int = 100,
     ) -> List[dict]:
         with self._get_connection() as conn:
@@ -518,6 +519,10 @@ class SQLiteStore:
             if desk and desk.upper() != "ALL":
                 clauses.append("desk = ?")
                 params.append(desk.upper())
+            if version and version.upper() == "V2":
+                clauses.append("opened_at_ms >= 1791268500000")
+            elif version and version.upper() == "V1":
+                clauses.append("opened_at_ms < 1791268500000")
             where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
             params.append(limit)
             cur = conn.execute(

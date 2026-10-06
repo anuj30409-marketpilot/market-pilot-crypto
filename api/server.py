@@ -162,12 +162,13 @@ def get_paper_positions(
     symbol: Optional[str] = Query(None),
     status: Optional[str] = Query(None, description="OPEN | CLOSED | LIQUIDATED"),
     desk: Optional[str] = Query(None, description="QUANT | SUPERHUMAN | ALL"),
+    version: Optional[str] = Query("ALL", description="V2 | ALL | V1"),
     limit: int = Query(50, ge=1, le=200),
 ):
     """Returns paper positions from database (persisted across restarts)."""
     return {
-        "positions": sqlite_store.get_paper_positions(symbol=symbol, status=status, desk=desk, limit=limit),
-        "summary": paper_engine.get_summary(desk=desk or "ALL"),
+        "positions": sqlite_store.get_paper_positions(symbol=symbol, status=status, desk=desk, version=version, limit=limit),
+        "summary": paper_engine.get_summary(desk=desk or "ALL", version=version or "ALL"),
     }
 
 
@@ -175,11 +176,12 @@ def get_paper_positions(
 def get_live_paper_positions(
     symbol: Optional[str] = Query(None),
     desk: Optional[str] = Query(None, description="QUANT | SUPERHUMAN | ALL"),
+    version: Optional[str] = Query("ALL", description="V2 | ALL | V1"),
 ):
     """Returns live in-memory open positions with real-time unrealised PnL."""
     return {
-        "positions": paper_engine.get_positions(symbol=symbol, status="OPEN", desk=desk),
-        "summary": paper_engine.get_summary(desk=desk or "ALL"),
+        "positions": paper_engine.get_positions(symbol=symbol, status="OPEN", desk=desk, version=version),
+        "summary": paper_engine.get_summary(desk=desk or "ALL", version=version or "ALL"),
     }
 
 
@@ -197,9 +199,12 @@ async def close_paper_position(position_id: str, reason: str = Query("MANUAL")):
 
 
 @app.get("/paper/summary")
-def get_paper_summary(desk: str = Query("ALL", description="QUANT | SUPERHUMAN | ALL")):
-    """Returns aggregate P&L, fees, funding drag and capital utilisation for specified desk."""
-    return paper_engine.get_summary(desk=desk)
+def get_paper_summary(
+    desk: str = Query("ALL", description="QUANT | SUPERHUMAN | ALL"),
+    version: str = Query("ALL", description="V2 | ALL | V1")
+):
+    """Returns aggregate P&L, fees, funding drag and capital utilisation for specified desk and engine version."""
+    return paper_engine.get_summary(desk=desk, version=version)
 
 
 # ── Strategy Registry & Governance Endpoints ───────────────────────────────

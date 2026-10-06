@@ -323,12 +323,14 @@ class PaperEngine:
         )
         return pos.to_dict()
 
-    def get_positions(self, symbol: Optional[str] = None, status: str = "OPEN", desk: Optional[str] = None) -> List[dict]:
+    def get_positions(self, symbol: Optional[str] = None, status: str = "OPEN", desk: Optional[str] = None, version: Optional[str] = None) -> List[dict]:
+        v2_start = 1791268500000  # Oct 6, 2026 06:35:00 UTC
         positions = [
             p.to_dict() for p in self._positions.values()
             if p.status == status
             and (symbol is None or p.symbol == symbol.upper())
             and (desk is None or desk.upper() == "ALL" or p.desk == desk.upper())
+            and (version is None or version.upper() == "ALL" or (version.upper() == "V2" and p.opened_at_ms >= v2_start) or (version.upper() == "V1" and p.opened_at_ms < v2_start))
         ]
         return sorted(positions, key=lambda x: x["opened_at_ms"], reverse=True)
 
@@ -359,8 +361,17 @@ class PaperEngine:
             "net_pnl": round(total_realised + total_unrealised, 4),
         }
 
-    def get_summary(self, desk: str = "ALL") -> dict:
-        all_positions = list(self._positions.values())
+    def get_summary(self, desk: str = "ALL", version: str = "ALL") -> dict:
+        v2_start = 1791268500000  # Oct 6, 2026 06:35:00 UTC
+        raw_positions = list(self._positions.values())
+
+        if version and version.upper() == "V2":
+            all_positions = [p for p in raw_positions if p.opened_at_ms >= v2_start]
+        elif version and version.upper() == "V1":
+            all_positions = [p for p in raw_positions if p.opened_at_ms < v2_start]
+        else:
+            all_positions = raw_positions
+
         quant_positions = [p for p in all_positions if p.desk == "QUANT"]
         superhuman_positions = [p for p in all_positions if p.desk == "SUPERHUMAN"]
 
@@ -375,6 +386,7 @@ class PaperEngine:
         else:
             res = dict(combined_summary)
 
+        res["version"] = version.upper() if version else "ALL"
         res["quant"] = quant_summary
         res["superhuman"] = superhuman_summary
         return res
