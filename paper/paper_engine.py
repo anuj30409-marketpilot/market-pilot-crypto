@@ -343,8 +343,19 @@ class PaperEngine:
         total_fees = sum(p.total_fees_usdt for p in positions_list)
         total_funding = sum(p.funding_paid_usdt for p in positions_list)
         margin_used = sum(p.margin_usdt for p in open_pos)
-        wins = len([p for p in closed_pos if (p.realised_pnl or 0.0) > 0])
+        
+        win_positions = [p for p in closed_pos if (p.realised_pnl or 0.0) > 0]
+        loss_positions = [p for p in closed_pos if (p.realised_pnl or 0.0) <= 0]
+        wins = len(win_positions)
+        losses = len(loss_positions)
         win_rate = (wins / len(closed_pos) * 100) if closed_pos else 0.0
+
+        net_wins = sum(p.realised_pnl or 0.0 for p in win_positions)
+        net_losses = abs(sum(p.realised_pnl or 0.0 for p in loss_positions))
+        avg_win = (net_wins / wins) if wins else 0.0
+        avg_loss = (net_losses / losses) if losses else 0.0
+        payoff_ratio = round(avg_win / avg_loss, 2) if avg_loss > 0 else (round(avg_win, 2) if avg_win > 0 else 0.0)
+        profit_factor = round(net_wins / net_losses, 2) if net_losses > 0 else (round(net_wins, 2) if net_wins > 0 else 0.0)
 
         return {
             "desk": desk_label,
@@ -354,6 +365,10 @@ class PaperEngine:
             "open_positions": len(open_pos),
             "total_trades": len(closed_pos),
             "win_rate_pct": round(win_rate, 2),
+            "profit_factor": profit_factor,
+            "payoff_ratio": payoff_ratio,
+            "avg_win_usdt": round(avg_win, 2),
+            "avg_loss_usdt": round(avg_loss, 2),
             "total_unrealised_pnl": round(total_unrealised, 4),
             "total_realised_pnl": round(total_realised, 4),
             "total_fees_paid_usdt": round(total_fees, 4),
@@ -531,12 +546,12 @@ class PaperEngine:
             elif pos.take_profit_price and mark <= pos.take_profit_price:
                 hit, reason, gap = True, "TAKE_PROFIT", False
 
-        # Stagnation Decay Exit: If held >= 45m and floating move is stagnant (|floating bps| <= 15 bps)
+        # Stagnation Momentum Hurdle: If held >= 45m and floating move has not reached +20 bps
         elapsed_ms = now_utc_ms() - pos.opened_at_ms
         if not hit and pos.max_hold_ms and pos.max_hold_ms >= 7200000:  # for 2h+ swing trades
             if elapsed_ms >= 45 * 60 * 1000:
                 floating_bps = (mark - pos.entry_price) / pos.entry_price * 10000 if pos.direction == "LONG" else (pos.entry_price - mark) / pos.entry_price * 10000
-                if -15.0 <= floating_bps <= 15.0:
+                if floating_bps < 20.0:
                     hit, reason, gap = True, "STAGNATION_EXIT", False
 
         # Time-stop check based on strategy lifecycle (e.g. 20m, 60m, 2h, 8h)

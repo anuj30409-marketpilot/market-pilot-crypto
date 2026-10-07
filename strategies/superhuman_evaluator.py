@@ -42,19 +42,21 @@ def evaluate_superhuman_macro_regime(deriv: DerivativesState, ob: OrderbookSnaps
     cvd_z = deriv.cvd_notional_usd_zscore
     regime = deriv.regime
 
-    # Thesis: Trending/high-volatility regimes are ideal, but RANGE with strong CVD impulse
-    # (>= 1.60σ) signals early breakout — regime lags price by definition.
+    # Thesis: Directional and high-volatility regimes only.
+    # Strictly reject RANGE, LOW_VOLATILITY, and FUNDING_EXTREME to eliminate false breakout chop.
     HARD_REGIMES = {"TRENDING_UP", "TRENDING_DOWN", "HIGH_VOLATILITY"}
-    in_hard_regime = regime in HARD_REGIMES
-    range_breakout  = (regime == "RANGE" and abs(cvd_z) >= 1.60)
-
-    if not (in_hard_regime or range_breakout):
+    if regime not in HARD_REGIMES:
         rejections.append("REJECT_REGIME_UNFAVORABLE")
 
-    # CVD impulse threshold lowered: 2.5σ was a 1-in-160 event per 60s snapshot.
-    # 1.6σ captures the leading edge of a breakout while remaining above ~94th percentile.
+    # CVD impulse threshold: >= 1.60σ in direction of macro trend
     if abs(cvd_z) < 1.60:
         rejections.append("REJECT_SIGNAL_THRESHOLD_NOT_MET")
+
+    # Directional Alignment: LONG in TRENDING_UP, SHORT in TRENDING_DOWN
+    if regime == "TRENDING_UP" and cvd_z < 1.60:
+        rejections.append("REJECT_CVD_DIRECTION_MISMATCH")
+    elif regime == "TRENDING_DOWN" and cvd_z > -1.60:
+        rejections.append("REJECT_CVD_DIRECTION_MISMATCH")
 
     # Edge calculation: 1.6σ CVD yields ~13.6 bps gross edge; friction is ~10-11 bps
     expected_edge_bps = abs(cvd_z) * 8.5  # e.g. 1.6 * 8.5 = 13.6 bps
@@ -113,7 +115,7 @@ def evaluate_superhuman_cross_venue(deriv: DerivativesState, ob: OrderbookSnapsh
     if not ok_parity:
         rejections.append("REJECT_EXECUTION_UNCERTAINTY")
 
-    if dislocation_bps < 10.0:
+    if dislocation_bps < 15.0:
         rejections.append("REJECT_SIGNAL_THRESHOLD_NOT_MET")
 
     expected_edge_bps = dislocation_bps * 1.5
