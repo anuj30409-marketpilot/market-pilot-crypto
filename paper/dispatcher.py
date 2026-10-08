@@ -40,7 +40,7 @@ STRATEGY_PROFILES = {
     "STRAT_ORDERBOOK_MOMENTUM_V1": {
         "sl_pct": 0.45,
         "tp_pct": 0.80,
-        "max_hold_ms": 20 * 60 * 1000,  # 20 minutes
+        "max_hold_ms": 4 * 60 * 1000,  # 4 minutes (aligned with orderbook alpha half-life)
         "leverage": 5,
     },
     "STRAT_LIQUIDATION_FADER_V1": {

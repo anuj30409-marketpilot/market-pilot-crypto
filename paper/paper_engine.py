@@ -504,54 +504,54 @@ class PaperEngine:
         reason = ""
         gap = False
 
-        # Two-Tier Dynamic Ratchet:
-        # Tier 1 (+35 bps floating profit): Ratchet SL to Entry + 12 bps friction (locks Breakeven)
-        # Tier 2 (+70 bps floating profit): Ratchet SL to Entry + 35 bps (locks +23 bps net profit)
+        # Two-Tier Dynamic Ratchet (Auditor Calibrated Invariants):
+        # Tier 1 (+60 bps floating profit): Ratchet SL to Entry + 22 bps (locks +9 bps net profit after all fees & slippage)
+        # Tier 2 (+95 bps floating profit): Ratchet SL to Entry + 60 bps (locks +47 bps net profit)
         if pos.direction == "LONG":
-            t1_sl = pos.entry_price * 1.0012  # Entry + 12 bps friction
-            t2_sl = pos.entry_price * 1.0035  # Entry + 35 bps profit
+            t1_sl = pos.entry_price * 1.0022  # Entry + 22 bps net profit lock
+            t2_sl = pos.entry_price * 1.0060  # Entry + 60 bps net profit lock
 
-            # Tier 2 check (+70 bps)
-            if mark >= pos.entry_price * 1.0070 and (not pos.stop_loss_price or pos.stop_loss_price < t2_sl):
+            # Tier 2 check (+95 bps)
+            if mark >= pos.entry_price * 1.0095 and (not pos.stop_loss_price or pos.stop_loss_price < t2_sl):
                 pos.stop_loss_price = t2_sl
                 sqlite_store.upsert_paper_position(pos.to_dict())
-                logger.info(f"[PAPER RATCHET TIER-2] {pos.symbol} LONG SL raised to lock in +35bps profit @ {pos.stop_loss_price:.2f}")
-            # Tier 1 check (+35 bps)
-            elif mark >= pos.entry_price * 1.0035 and (not pos.stop_loss_price or pos.stop_loss_price < t1_sl):
+                logger.info(f"[PAPER RATCHET TIER-2] {pos.symbol} LONG SL raised to lock in +60bps profit @ {pos.stop_loss_price:.2f}")
+            # Tier 1 check (+60 bps)
+            elif mark >= pos.entry_price * 1.0060 and (not pos.stop_loss_price or pos.stop_loss_price < t1_sl):
                 pos.stop_loss_price = t1_sl
                 sqlite_store.upsert_paper_position(pos.to_dict())
-                logger.info(f"[PAPER RATCHET TIER-1] {pos.symbol} LONG SL raised to lock in BE+friction @ {pos.stop_loss_price:.2f}")
+                logger.info(f"[PAPER RATCHET TIER-1] {pos.symbol} LONG SL raised to lock in +22bps profit @ {pos.stop_loss_price:.2f}")
 
             if pos.stop_loss_price and mark <= pos.stop_loss_price:
                 hit, reason, gap = True, "STOP_LOSS", True
             elif pos.take_profit_price and mark >= pos.take_profit_price:
                 hit, reason, gap = True, "TAKE_PROFIT", False
         else:
-            t1_sl = pos.entry_price * 0.9988  # Entry - 12 bps friction
-            t2_sl = pos.entry_price * 0.9965  # Entry - 35 bps profit
+            t1_sl = pos.entry_price * 0.9978  # Entry - 22 bps net profit lock
+            t2_sl = pos.entry_price * 0.9940  # Entry - 60 bps net profit lock
 
-            # Tier 2 check (+70 bps short)
-            if mark <= pos.entry_price * 0.9930 and (not pos.stop_loss_price or pos.stop_loss_price > t2_sl):
+            # Tier 2 check (+95 bps short)
+            if mark <= pos.entry_price * 0.9905 and (not pos.stop_loss_price or pos.stop_loss_price > t2_sl):
                 pos.stop_loss_price = t2_sl
                 sqlite_store.upsert_paper_position(pos.to_dict())
-                logger.info(f"[PAPER RATCHET TIER-2] {pos.symbol} SHORT SL lowered to lock in +35bps profit @ {pos.stop_loss_price:.2f}")
-            # Tier 1 check (+35 bps short)
-            elif mark <= pos.entry_price * 0.9965 and (not pos.stop_loss_price or pos.stop_loss_price > t1_sl):
+                logger.info(f"[PAPER RATCHET TIER-2] {pos.symbol} SHORT SL lowered to lock in +60bps profit @ {pos.stop_loss_price:.2f}")
+            # Tier 1 check (+60 bps short)
+            elif mark <= pos.entry_price * 0.9940 and (not pos.stop_loss_price or pos.stop_loss_price > t1_sl):
                 pos.stop_loss_price = t1_sl
                 sqlite_store.upsert_paper_position(pos.to_dict())
-                logger.info(f"[PAPER RATCHET TIER-1] {pos.symbol} SHORT SL lowered to lock in BE+friction @ {pos.stop_loss_price:.2f}")
+                logger.info(f"[PAPER RATCHET TIER-1] {pos.symbol} SHORT SL lowered to lock in +22bps profit @ {pos.stop_loss_price:.2f}")
 
             if pos.stop_loss_price and mark >= pos.stop_loss_price:
                 hit, reason, gap = True, "STOP_LOSS", True
             elif pos.take_profit_price and mark <= pos.take_profit_price:
                 hit, reason, gap = True, "TAKE_PROFIT", False
 
-        # Stagnation Momentum Hurdle: If held >= 45m and floating move has not reached +20 bps
+        # Stagnation Decay Exit: If held >= 90m (75% of 2h lifecycle) and trade has negative adverse drift (< -15 bps)
         elapsed_ms = now_utc_ms() - pos.opened_at_ms
         if not hit and pos.max_hold_ms and pos.max_hold_ms >= 7200000:  # for 2h+ swing trades
-            if elapsed_ms >= 45 * 60 * 1000:
+            if elapsed_ms >= 90 * 60 * 1000:
                 floating_bps = (mark - pos.entry_price) / pos.entry_price * 10000 if pos.direction == "LONG" else (pos.entry_price - mark) / pos.entry_price * 10000
-                if floating_bps < 20.0:
+                if floating_bps < -15.0:
                     hit, reason, gap = True, "STAGNATION_EXIT", False
 
         # Time-stop check based on strategy lifecycle (e.g. 20m, 60m, 2h, 8h)
