@@ -546,10 +546,11 @@ class PaperEngine:
             elif pos.take_profit_price and mark <= pos.take_profit_price:
                 hit, reason, gap = True, "TAKE_PROFIT", False
 
-        # Stagnation Decay Exit: If held >= 90m (75% of 2h lifecycle) and trade has negative adverse drift (< -15 bps)
+        # Stagnation Decay Exit: If held >= 75% of strategy lifecycle (e.g. 90m for 2h swing, 6h for 8h carry) and trade has negative adverse drift (< -15 bps)
         elapsed_ms = now_utc_ms() - pos.opened_at_ms
-        if not hit and pos.max_hold_ms and pos.max_hold_ms >= 7200000:  # for 2h+ swing trades
-            if elapsed_ms >= 90 * 60 * 1000:
+        if not hit and pos.max_hold_ms and pos.max_hold_ms >= 7200000:  # for 2h+ swing/carry trades
+            stagnation_eval_ms = int(pos.max_hold_ms * 0.75)
+            if elapsed_ms >= stagnation_eval_ms:
                 floating_bps = (mark - pos.entry_price) / pos.entry_price * 10000 if pos.direction == "LONG" else (pos.entry_price - mark) / pos.entry_price * 10000
                 if floating_bps < -15.0:
                     hit, reason, gap = True, "STAGNATION_EXIT", False

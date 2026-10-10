@@ -86,7 +86,6 @@
   3. **S2 Orderbook Momentum profile calibration:** TP was 1.20% (120 bps) for a 10 bps micro-orderbook edge, forcing 100% of trades to 30m time-stop. Calibrated to `sl_pct = 0.40%`, `tp_pct = 0.60%` with realistic 30m hold.
   4. **Swing Momentum noise filter (S4 & SH4):** 20-period Donchian on 1m bars was only 20m of noise. Upgraded `DONCHIAN_PERIOD = 60` (1 hour) and `EMA_FAST = 30`, `EMA_SLOW = 90` with dynamic volume SMA window and CVD flow alignment check (`cvd_z >= 0.30` for long, `<= -0.30` for short).
   5. **Expert Crypto Auditor Agent tool deployed:** Created `scripts/expert_crypto_agent.py` for automated multidimensional desk auditing.
-- **Verification:** All test suites passed 100% (Phase 4 dispatcher & risk tests, Phase 5 control & reconciliation tests, dual-desk isolation & readiness tests, OS foundation tests).
 - **Deployment Status:** NOT DEPLOYED. Local only. User executes deploy per INV-OPS-001.
 
 ### 2026-10-01 (Part 2): S1 Funding Reversion Unlocked & Liquidation Parser Fixed (INV-OPS-001 honoured)
@@ -96,4 +95,17 @@
   2. **Binance Liquidation WebSocket Stream parser fixed:** Updated `collectors/binance_ws.py` to handle both list/array and dict structures on `!forceOrder@arr` payloads, restoring liquidation event ingestion and enabling Strategy S3.
 - **Verification:** All test suites passed cleanly (100%).
 - **Deployment Status:** NOT DEPLOYED. Local only. User executes deploy per INV-OPS-001.
+
+### 2026-10-10: V2 Win Rate Forensic Audit & Proportional Stagnation Lifecycle Fix (INV-OPS-001 honoured)
+- **Finding:** V2 win rate stood at 28.2% (29 wins / 74 losses across 103 trades) vs 39.3% in V1. End-to-end data audit revealed:
+  1. `STAGNATION_EXIT` was responsible for -$204.78 in losses (more than the total net -$186.57 lost by the entire desk) with a 13.3% win rate (6/45).
+  2. Hardcoded `elapsed_ms >= 90m` was prematurely executing Strategy S1 (`FUNDING_REVERSION`), an 8-hour macro carry strategy (`max_hold_ms = 8h`). At 90 minutes (only 18.75% into the trade), minor -15 bps noise caused an instant exit before 8h funding payout or basis convergence occurred (10/13 S1 trades killed).
+  3. Proportional invariant was violated for non-2h trades.
+  4. S2 (`ORDERBOOK_MOMENTUM`) with 4m horizon vs 80 bps TP resulted in 21/22 trades exiting on 4m `TIME_STOP` with tiny price movements (< 10 bps) devoured by 8.0 bps round-trip taker fees.
+- **Changes applied:**
+  1. `paper/paper_engine.py`: Calibrated stagnation decay exit to evaluate at 75% of the position's specific lifecycle (`stagnation_eval_ms = int(pos.max_hold_ms * 0.75)`), preserving 8-hour carry trades until 6 hours (360m) while maintaining 90m for 2h swing trades.
+  2. Frontend (`market-pilot` repository): Added dedicated `Result` column (`WIN`, `LOSS`, `BE` badges) in `CryptoPaperDesk.tsx` and styled in `CryptoPaperDesk.css` for clear visual trade outcome distinction in the Trade History table.
+- **Verification:** All OS foundation, Phase 4 dispatcher, Phase 5 control, and quantitative invariant test suites passed 100%. Frontend built cleanly (0 errors).
+- **Deployment Status:** NOT DEPLOYED. Local only. User executes deploys per INV-OPS-001.
+
 
