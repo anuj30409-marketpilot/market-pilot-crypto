@@ -18,7 +18,7 @@ Whenever this workspace is opened:
 
 1. **INV-CRYPTO-001:** Paper-only. Zero live exchange execution.
 2. **INV-CRYPTO-010:** Complete isolation from the Indian `market-pilot` equities/options desk.
-3. **INV-OPS-001:** The agent NEVER executes deploy commands on Oracle VM 1 or VM 2. User executes deploys.
+3. **INV-OPS-001:** The agent NEVER deploys autonomously. When the user explicitly instructs "you deploy", the agent runs the verified deployment on Oracle VM 1 and VM 2 on the user's behalf.
 4. **INV-CRYPTO-013:** Candidate ledger provenance: retain all accepted, rejected, and watch-listed records with complete negative proof rationale.
 
 ---

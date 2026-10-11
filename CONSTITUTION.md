@@ -25,7 +25,7 @@ Every architectural and quantitative calibration must be empirically audited acr
 Code must be modular, reusable, typed, and 100% verified against quantitative and risk invariants before committing.
 
 ## Article 9
-INV-OPS-001: The AI agent NEVER executes deployment commands on Oracle VM 1 or Oracle VM 2. User executes all deployments.
+INV-OPS-001: The AI agent NEVER executes deployment commands autonomously. However, when the human user explicitly instructs the agent to deploy (e.g. "you deploy" / "deploy now"), the agent is authorized and directed to execute the verified deployment scripts on Oracle VM 1 and VM 2 on the user's behalf.
 
 ## Article 10
 Zero hardcoded currency constants. Position sizing, stop losses, profit targets, and trailing ratchets must be derived dynamically from account equity risk budgets and full round-trip friction.
