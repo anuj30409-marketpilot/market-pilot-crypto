@@ -120,7 +120,7 @@
   4. Population Stability Index (PSI) drift monitoring ($\le 0.25$) wired to trip `DRIFT_ALERT` on regime shifts.
 - **Changes Applied:**
   1. `paper/dispatcher.py`: Calibrated S2 SL/TP and enforced 5.0 bps minimum net edge hurdle.
-  2. `ml/retraining_engine.py`: Implemented MLRetrainingEngine with metadata persistence (`data/ml_metadata.json`), dynamic Monday 00:00 UTC scheduling, and PSI drift monitor.
+  2. `ml/retraining_engine.py` & `main.py`: Implemented MLRetrainingEngine with metadata persistence (`data/ml_metadata.json`), dynamic Monday 00:00 UTC scheduling, PSI drift monitor, and wired `run_scheduler_loop(check_interval_seconds=300)` background task into `main.py` asyncio supervisor for autonomous execution.
   3. `api/server.py`: Exposed `GET /ml/status` and `POST /ml/retrain`.
   4. Frontend (`frontend-v3` in `market-pilot`): Added `MLModelStatusResponse` and fetcher in `crypto-paper-api.ts`. Integrated `MLModelCadenceCard` in `CryptoPaperDesk.tsx` and styled in `CryptoPaperDesk.css` with live countdown, dataset vitals, and drift alerts.
 - **Verification:** All 5 quantitative invariants, Phase 4 dispatcher tests, Phase 5 control tests, and TypeScript frontend build passed cleanly (100%).

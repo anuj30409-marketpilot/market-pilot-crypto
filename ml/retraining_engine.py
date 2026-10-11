@@ -11,6 +11,7 @@ import os
 import json
 import sqlite3
 import logging
+import asyncio
 import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -215,5 +216,42 @@ class MLRetrainingEngine:
 
         return updated_payload
 
+    async def run_scheduler_loop(self, check_interval_seconds: int = 300):
+        """Autonomous background worker that evaluates the weekly Monday 00:00 UTC schedule.
+
+        Wakes up every check_interval_seconds (default 5m), checks if current UTC time
+        has crossed next_retrain_at_utc, and triggers a walk-forward cycle idempotently.
+        """
+        logger.info("Starting autonomous ML weekly retraining scheduler loop (interval=%ds)...", check_interval_seconds)
+        last_executed_date_str: Optional[str] = None
+
+        while True:
+            try:
+                now_utc = datetime.datetime.now(datetime.timezone.utc)
+                status = self.get_status()
+                next_retrain_iso = status.get("next_retrain_at_utc")
+                today_str = now_utc.strftime("%Y-%m-%d")
+
+                if next_retrain_iso:
+                    # Parse ISO string safely (supporting Python 3.10+)
+                    clean_iso = next_retrain_iso.replace("Z", "+00:00")
+                    next_dt = datetime.datetime.fromisoformat(clean_iso)
+                    if now_utc >= next_dt and last_executed_date_str != today_str:
+                        logger.info(
+                            "Autonomous ML Retraining: scheduled boundary %s reached at %s. Running walk-forward cycle...",
+                            next_retrain_iso, now_utc.isoformat()
+                        )
+                        self.run_retraining_cycle()
+                        last_executed_date_str = today_str
+                        logger.info(
+                            "Autonomous ML Retraining cycle complete. Next cycle scheduled for %s.",
+                            self.get_status().get("next_retrain_at_utc")
+                        )
+            except Exception as e:
+                logger.error("Unexpected error in ML retraining scheduler loop: %s", e)
+
+            await asyncio.sleep(check_interval_seconds)
+
 
 retraining_engine = MLRetrainingEngine()
+

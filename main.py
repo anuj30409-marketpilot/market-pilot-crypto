@@ -43,6 +43,10 @@ async def run_services():
     # 6. Continuous Superhuman AI Strategy Evaluator (SH1, SH2, SH3 every 60s)
     superhuman_task = asyncio.create_task(superhuman_evaluator.run_loop())
 
+    # 6b. Continuous Autonomous ML Retraining Scheduler (evaluates Monday 00:00 UTC schedule)
+    from ml.retraining_engine import retraining_engine
+    ml_scheduler_task = asyncio.create_task(retraining_engine.run_scheduler_loop(check_interval_seconds=300))
+
     # 7. Configure Uvicorn server
     config = uvicorn.Config(
         app=app,
@@ -67,6 +71,7 @@ async def run_services():
         paper_funding_task,
         evaluator_task,
         superhuman_task,
+        ml_scheduler_task,
     )
 
 if __name__ == "__main__":
