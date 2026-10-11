@@ -261,3 +261,20 @@ def get_regime(symbol: str = Query("BTCUSDT")):
             }
     return {"symbol": upper, "regime": "RANGE", "status": "WARMING_UP"}
 
+
+# ── ML Meta-Model Governance & Retraining Endpoints ─────────────────────────
+
+@app.get("/ml/status")
+def get_ml_status():
+    """Returns ML meta-labeling model status, dataset vitals, OOS validation metrics, and weekly retraining schedule."""
+    from ml.retraining_engine import retraining_engine
+    return retraining_engine.get_status()
+
+
+@app.post("/ml/retrain")
+def trigger_ml_retraining():
+    """Triggers an off-cycle or scheduled walk-forward retraining run."""
+    from ml.retraining_engine import retraining_engine
+    result = retraining_engine.run_retraining_cycle()
+    return {"status": "SUCCESS", "result": result}
+

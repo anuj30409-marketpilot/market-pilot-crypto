@@ -38,9 +38,9 @@ STRATEGY_PROFILES = {
         "leverage": 5,
     },
     "STRAT_ORDERBOOK_MOMENTUM_V1": {
-        "sl_pct": 0.45,
-        "tp_pct": 0.80,
-        "max_hold_ms": 4 * 60 * 1000,  # 4 minutes (aligned with orderbook alpha half-life)
+        "sl_pct": 0.30,
+        "tp_pct": 0.35,
+        "max_hold_ms": 4 * 60 * 1000,  # 4 minutes (calibrated realistic targets vs 5.8-sigma impossibility)
         "leverage": 5,
     },
     "STRAT_LIQUIDATION_FADER_V1": {
@@ -278,6 +278,16 @@ class PaperDispatcher:
         """Evaluates risk controls and executes candidate on the paper desk."""
         if candidate.decision != "ACCEPT":
             return {"status": "SKIPPED", "reason": f"Candidate decision is {candidate.decision}"}
+
+        # Gate: Enforce minimum net edge hurdle (5.0 bps) to prevent taker fee friction bleed
+        min_net_edge_bps = 5.0
+        cand_net_edge = getattr(candidate, "expected_net_edge_bps", 0.0)
+        if cand_net_edge < min_net_edge_bps:
+            logger.warning(
+                "Paper dispatcher rejected %s (%s): net edge %.2f bps < minimum %.2f bps hurdle",
+                candidate.candidate_id, candidate.strategy_id, cand_net_edge, min_net_edge_bps
+            )
+            return {"status": "REJECTED", "reason": f"INSUFFICIENT_NET_EDGE_{cand_net_edge:.1f}BPS_LT_5BPS"}
 
         now_ms = now_utc_ms()
         symbol = candidate.symbol.upper()

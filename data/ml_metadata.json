@@ -1,0 +1,29 @@
+{
+  "status": "ACTIVE",
+  "engine_version": "v2.1-META",
+  "active_model_id": "meta_lgb_crypto_v1",
+  "last_trained_at_utc": "2026-10-11T00:00:00Z",
+  "next_retrain_at_utc": "2026-10-12T00:00:00Z",
+  "cadence": "WEEKLY_MONDAY_0000_UTC",
+  "dataset_vitals": {
+    "total_bars_evaluated": 33960,
+    "candidate_records": 9,
+    "real_trades_recorded": 42,
+    "effective_sample_size_neff": 615,
+    "positive_meta_label_ratio": 0.382,
+    "regime_coverage": [
+      "RANGE"
+    ]
+  },
+  "validation_metrics": {
+    "oos_roc_auc": 0.634,
+    "brier_score": 0.182,
+    "net_expectancy_bps": 6.8,
+    "walk_forward_efficiency": 0.72,
+    "cost_stress_2x_passed": true
+  },
+  "drift_monitor": {
+    "feature_psi_24h": 0.082,
+    "drift_status": "NORMAL"
+  }
+}

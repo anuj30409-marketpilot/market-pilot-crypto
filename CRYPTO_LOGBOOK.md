@@ -108,4 +108,23 @@
 - **Verification:** All OS foundation, Phase 4 dispatcher, Phase 5 control, and quantitative invariant test suites passed 100%. Frontend built cleanly (0 errors).
 - **Deployment Status:** NOT DEPLOYED. Local only. User executes deploys per INV-OPS-001.
 
+### 2026-10-11: ML Meta-Model Governance, Weekly Retraining Cadence & Friction Gate Architecture (INV-OPS-001 honoured)
+- **Empirical Audit (288 Real Trades across 13 days on Oracle VM 2):**
+  1. Combined Desk: 287 closed trades, 33.4% win rate, Gross PnL -$178.41, Exchange Taker Fees $311.35, Net PnL -$489.76.
+  2. Fee Friction finding: Taker fees ($311.35) account for 63.6% of the entire net drawdown. Micro-horizon bets were systematically bled by 8.0 bps round-trip friction.
+  3. ML Feasibility: Direct training on 288 trades rejected due to VC-dimension and degrees-of-freedom violations (EPV = 4.8 < 20). Formulated Meta-Labeling over 33,960 1m bars and 255k candidate ledger rows with Triple Barrier target net of 8.0 bps taker fees.
+- **Independent Quant Audit (`independent_quant_auditor`):**
+  1. Addressed Label Concurrency Fallacy: Effective sample size $N_{\text{eff}} \approx 615$ calculated via $w_i = 1/\bar{c}$. Enforced Purged K-Fold CV with 8-hour embargo.
+  2. Retraining Cadence: Scheduled for **Monday 00:00 UTC** (capturing full weekly institutional volume, 21 funding intervals, and avoiding Sunday CME gap distortions) over a 60-day regime-stratified reservoir.
+  3. Microstructure Calibration: S2 calibrated to `sl_pct = 0.30%`, `tp_pct = 0.35%` (4m horizon) with minimum net edge gate `expected_net_edge_bps >= 5.0` in `paper/dispatcher.py`.
+  4. Population Stability Index (PSI) drift monitoring ($\le 0.25$) wired to trip `DRIFT_ALERT` on regime shifts.
+- **Changes Applied:**
+  1. `paper/dispatcher.py`: Calibrated S2 SL/TP and enforced 5.0 bps minimum net edge hurdle.
+  2. `ml/retraining_engine.py`: Implemented MLRetrainingEngine with metadata persistence (`data/ml_metadata.json`), dynamic Monday 00:00 UTC scheduling, and PSI drift monitor.
+  3. `api/server.py`: Exposed `GET /ml/status` and `POST /ml/retrain`.
+  4. Frontend (`frontend-v3` in `market-pilot`): Added `MLModelStatusResponse` and fetcher in `crypto-paper-api.ts`. Integrated `MLModelCadenceCard` in `CryptoPaperDesk.tsx` and styled in `CryptoPaperDesk.css` with live countdown, dataset vitals, and drift alerts.
+- **Verification:** All 5 quantitative invariants, Phase 4 dispatcher tests, Phase 5 control tests, and TypeScript frontend build passed cleanly (100%).
+- **Deployment Status:** NOT DEPLOYED. Local only. User executes deploy per INV-OPS-001.
+
+
 

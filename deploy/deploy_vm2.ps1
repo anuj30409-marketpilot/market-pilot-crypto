@@ -20,6 +20,8 @@ if (-not (Test-Path $SSH_KEY)) {
 $COMMANDS = @"
 cd /home/ubuntu/market-pilot-crypto && \
 git fetch origin main && \
+rm -f scripts/get_live_telemetry.py && \
+git checkout main -f && \
 git pull origin main && \
 .venv/bin/pip install -q -r requirements.txt && \
 .venv/bin/python scripts/test_os_foundation.py && \
