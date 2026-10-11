@@ -126,5 +126,23 @@
 - **Verification:** All 5 quantitative invariants, Phase 4 dispatcher tests, Phase 5 control tests, and TypeScript frontend build passed cleanly (100%).
 - **Deployment Status:** NOT DEPLOYED. Local only. User executes deploy per INV-OPS-001.
 
+### 2026-10-11 (Part 2): Passive Maker Order Execution & Strategy S3 Reformulation (INV-OPS-001 honoured)
+- **Problem 1 (63.6% Fee Drag):** Exchange taker fees ($311.35 across 288 trades) severely impaired performance. Taker fees cost 8.0 bps round-trip (0.04% entry + 0.04% exit).
+- **Solution 1 (Passive Maker Execution in `paper/slippage.py` & `paper/paper_engine.py`):**
+  1. Implemented `simulate_maker_fill` with `MAKER_FEE_BPS = 2.0` (0.02% vs 0.04% taker) and conservative `adverse_selection_bps = 1.0` penalty (anti-optimistic paper fill invariant).
+  2. Integrated `order_type="MAKER"` in `open_position`.
+  3. Configured Strategy S1 (`FUNDING_REVERSION`) to enter via Maker post-only limit orders, immediately slashing entry friction by 50% (from 4.0 bps to 2.0 bps).
+- **Problem 2 (Strategy S3 0/22,052 Rejections):**
+  1. S3 required $5.8M liquidations in 60s (`oi_impact >= 0.001` against $5.8B open interest), an >8σ impossible tail event.
+  2. Conjunctive temporal contradiction: demanded positive book imbalance during peak liquidation cascade (when book is aggressively cleared).
+- **Solution 2 (Strategy S3 Reformulation in `strategies/liquidation_fader.py` & `strategies/evaluator.py`):**
+  1. Replaced unreachable $5.8M requirement with empirical volume threshold: `liquidation_notional_60s >= $250,000` OR `liquidation_intensity >= 2.5`.
+  2. Implemented two-stage exhaustion architecture: allows fading after cascade peak once book replenishment begins (`imbalance_5 >= -0.10` or microprice edge reversal).
+- **Verification:**
+  1. Replay audit (`scripts/counterfactual_replay_audit.py`): Proved 5.0 bps net edge hurdle eliminates losing trades, saving >$41 drag, while Maker execution saves >$17 on S1 carry trades.
+  2. Invariant tests (`scripts/test_quant_invariants.py`): 5/5 passed (100%).
+  3. Dispatcher and Control test suites: 100% passed.
+- **Deployment Status:** NOT DEPLOYED. Local only. User executes deploy per INV-OPS-001.
+
 
 

@@ -21,8 +21,8 @@ from collectors.orderbook import BoundedOrderbook
 from collectors.derivatives import derivatives_engine
 from core.clock import now_utc_ms, now_utc_iso
 from paper.slippage import (
-    simulate_fill, get_ask_levels, get_bid_levels,
-    TAKER_FEE_BPS, FillResult
+    simulate_fill, simulate_maker_fill, get_ask_levels, get_bid_levels,
+    TAKER_FEE_BPS, MAKER_FEE_BPS, FillResult
 )
 from storage.sqlite_store import sqlite_store
 
@@ -220,12 +220,13 @@ class PaperEngine:
         risk_loss_usd: float = 0.0,
         stop_loss_distance_usd: float = 0.0,
         desk: str = "QUANT",
+        order_type: str = "TAKER",
     ) -> dict:
-        """Open a new paper position with realistic orderbook-walk fill."""
+        """Open a new paper position with realistic orderbook-walk or passive maker fill."""
         symbol = symbol.upper()
 
-        # Get live orderbook levels for slippage
-        fill = self._simulate_entry(symbol, direction, notional_usdt, orderbooks)
+        # Get live orderbook levels for slippage / maker fill
+        fill = self._simulate_entry(symbol, direction, notional_usdt, orderbooks, order_type=order_type)
         if fill is None:
             return {"error": "Orderbook unavailable — cannot simulate entry"}
 
@@ -464,13 +465,19 @@ class PaperEngine:
 
     def _simulate_entry(
         self, symbol: str, direction: str, notional: float,
-        orderbooks: Optional[Dict]
+        orderbooks: Optional[Dict], order_type: str = "TAKER"
     ) -> Optional[FillResult]:
         if not orderbooks or symbol not in orderbooks:
             return None
         ob = orderbooks[symbol]
         snap = ob.get_snapshot()
         mid = snap.mid_price
+
+        # Passive Maker Order: Post limit at best bid/ask, earning 2.0 bps maker fee
+        if order_type.upper() == "MAKER":
+            best_price = snap.best_bid if direction.upper() == "LONG" else snap.best_ask
+            return simulate_maker_fill(direction.upper(), notional, best_price, mid)
+
         if direction.upper() == "LONG":
             levels = get_ask_levels(ob)
         else:

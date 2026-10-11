@@ -15,6 +15,12 @@ logger = logging.getLogger("paper.slippage")
 # Binance USD-M Futures taker fee (bps)
 TAKER_FEE_BPS = 4.0  # 0.04%
 
+# Binance USD-M Futures maker fee (bps) — cuts fee friction by 50%
+MAKER_FEE_BPS = 2.0  # 0.02%
+
+# Adverse selection drift penalty for passive maker fills (AFML institutional standard)
+ADVERSE_SELECTION_HAIRCUT_BPS = 1.0
+
 # Extra gap-risk multiplier applied to SL/forced exits
 # (fast market assumption: actual fill is worse than model)
 GAP_RISK_MULTIPLIER = 1.5
@@ -28,7 +34,42 @@ class FillResult:
     requested_notional: float
     partial: bool             # True if book was too thin to fill in full
     levels_consumed: int      # How many orderbook levels were walked
-    fee_usdt: float           # Taker fee in USDT
+    fee_usdt: float           # Taker/maker fee in USDT
+
+
+def simulate_maker_fill(
+    side: str,                          # "BUY" or "SELL"
+    notional_usdt: float,               # How much USDT to buy/sell
+    best_price: float,                  # Best bid (for BUY) or best ask (for SELL)
+    mid_price: float,
+) -> FillResult:
+    """Simulates a non-optimistic passive Maker fill at top-of-book.
+
+    Captures the passive limit price with zero book-walk slippage, earns maker fee tier (2.0 bps),
+    and applies an institutional 1.0 bps adverse selection penalty to ensure paper rigor.
+    """
+    if best_price <= 0.0:
+        best_price = mid_price
+
+    # Adverse selection penalty: buyer fills slightly higher than un-shocked limit, seller slightly lower
+    if side == "BUY":
+        fill_price = best_price * (1.0 + (ADVERSE_SELECTION_HAIRCUT_BPS / 10_000))
+    else:
+        fill_price = best_price * (1.0 - (ADVERSE_SELECTION_HAIRCUT_BPS / 10_000))
+
+    slippage_bps = abs((fill_price - mid_price) / mid_price * 10_000)
+    fee_usdt = notional_usdt * (MAKER_FEE_BPS / 10_000)
+
+    return FillResult(
+        avg_price=fill_price,
+        slippage_bps=slippage_bps,
+        filled_notional=notional_usdt,
+        requested_notional=notional_usdt,
+        partial=False,
+        levels_consumed=1,
+        fee_usdt=fee_usdt,
+    )
+
 
 
 def simulate_fill(

@@ -354,6 +354,9 @@ class PaperDispatcher:
             candidate.candidate_id, strat_id, symbol, direction, desk, notional_usdt, risk_loss_usd, DEFAULT_RISK_PER_TRADE_PCT
         )
 
+        # Strategy execution style: S1 carry trades use passive MAKER limits (cuts fee by 50%), momentum uses TAKER
+        order_type = "MAKER" if strat_id == "STRAT_FUNDING_REVERSION_V1" else "TAKER"
+
         exec_result = await paper_engine.open_position(
             symbol=symbol,
             direction=direction,
@@ -371,6 +374,7 @@ class PaperDispatcher:
             risk_loss_usd=risk_loss_usd,
             stop_loss_distance_usd=sl_distance_usd,
             desk=desk,
+            order_type=order_type,
         )
 
         if "error" in exec_result:

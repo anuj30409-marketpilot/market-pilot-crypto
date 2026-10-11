@@ -67,7 +67,7 @@ class StrategyEvaluator:
             hypothesis="Cascading liquidation momentum exhausts into a vacuum and snaps back to mid.",
             feature_version="1.0",
             parameter_version="1.0",
-            entry_rules={"liquidation_intensity": 3.0, "oi_impact": 0.001},
+            entry_rules={"liquidation_intensity": 2.5, "min_notional_60s": 250000},
             exit_rules={"tp_pct": 1.0, "sl_pct": 0.50, "max_hold_mins": 60},
             risk_profile={"max_risk_pct": 0.25, "leverage": 5},
             status=StrategyStatus.PAPER_ACTIVE,
