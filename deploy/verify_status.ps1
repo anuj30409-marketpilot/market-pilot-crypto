@@ -67,6 +67,31 @@ try:
 except Exception as e:
     print('Failed to parse paper summary:', e)
 "
+
+echo ""
+echo "=== [5/5] ML RETRAINING CADENCE & DRIFT STATUS ==="
+curl -s http://127.0.0.1:8800/ml/status | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    meta = d.get('metadata', {})
+    status = d.get('status', 'UNKNOWN')
+    cadence = meta.get('cadence', 'UNKNOWN')
+    last_tr = meta.get('last_retrained_utc', 'NEVER')
+    next_tr = meta.get('next_scheduled_retrain_utc', 'UNKNOWN')
+    drift = meta.get('drift_status', 'UNKNOWN')
+    psi = meta.get('psi_score', 0.0)
+    samples = meta.get('training_samples', 0)
+    bars = meta.get('dataset_1m_bars', 0)
+    cands = meta.get('dataset_candidates', 0)
+    auc = meta.get('oos_roc_auc', 0.0)
+    print(f'  Status: {status} | Cadence: {cadence}')
+    print(f'  Last Retrained: {last_tr} | Next Scheduled: {next_tr}')
+    print(f'  Dataset Vitals: {samples} eff samples | {bars} 1m bars | {cands} candidates')
+    print(f'  Validation: OOS ROC-AUC={auc:.3f} | PSI={psi:.4f} ({drift})')
+except Exception as e:
+    print('Failed to parse ML status:', e)
+"
 '@
 
 $COMMANDS | ssh -i $SSH_KEY -o StrictHostKeyChecking=no "$USER@$VM2_IP" "bash -s"
