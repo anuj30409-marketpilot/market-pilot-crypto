@@ -40,37 +40,47 @@ class MicrostructuralFeatureStore:
         self.db_path = db_path
 
     def load_raw_data(self, min_bars: int = 200) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Loads 1m candles and derivatives states from SQLite."""
+        """Loads 1m candles and derivatives states from SQLite in read-only mode."""
         if not self.db_path or not os.path.exists(self.db_path):
             raise FileNotFoundError(f"Database not found at {self.db_path}")
 
-        conn = sqlite3.connect(self.db_path)
-        candles_df = pd.read_sql_query(
-            """
-            SELECT 
-                open_time_ms AS timestamp_ms,
-                symbol, open, high, low, close, volume, 
-                taker_buy_base_volume, taker_buy_quote_volume
-            FROM crypto_candles_1m 
-            ORDER BY open_time_ms ASC
-            """,
-            conn
-        )
+        # Amendment 2: Read-Only WAL Concurrency Guard (zero lock on active trade writers)
+        abs_path = os.path.abspath(self.db_path).replace("\\", "/")
+        db_uri = f"file:{abs_path}?mode=ro"
         try:
-            deriv_df = pd.read_sql_query(
+            conn = sqlite3.connect(db_uri, uri=True, timeout=60.0)
+        except Exception:
+            conn = sqlite3.connect(self.db_path, timeout=60.0)
+
+        try:
+            conn.execute("PRAGMA busy_timeout = 60000;")
+            candles_df = pd.read_sql_query(
                 """
                 SELECT 
-                    state_time_ms AS timestamp_ms,
-                    symbol, mark_price, index_price, basis_bps,
-                    funding_rate, funding_zscore_7d, cvd_1m, taker_buy_ratio_1m
-                FROM crypto_derivatives_state 
-                ORDER BY state_time_ms ASC
+                    open_time_ms AS timestamp_ms,
+                    symbol, open, high, low, close, volume, 
+                    taker_buy_base_volume, taker_buy_quote_volume
+                FROM crypto_candles_1m 
+                ORDER BY open_time_ms ASC
                 """,
                 conn
             )
-        except Exception:
-            deriv_df = pd.DataFrame()
-        conn.close()
+            try:
+                deriv_df = pd.read_sql_query(
+                    """
+                    SELECT 
+                        state_time_ms AS timestamp_ms,
+                        symbol, mark_price, index_price, basis_bps,
+                        funding_rate, funding_zscore_7d, cvd_1m, taker_buy_ratio_1m
+                    FROM crypto_derivatives_state 
+                    ORDER BY state_time_ms ASC
+                    """,
+                    conn
+                )
+            except Exception:
+                deriv_df = pd.DataFrame()
+        finally:
+            conn.close()
 
         return candles_df, deriv_df
 

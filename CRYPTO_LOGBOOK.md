@@ -192,6 +192,25 @@
   - `ml/feature_store.py`: Tested with live remote streaming. PASSED.
   - All 4 core test suites (`test_quant_invariants.py`, `test_phase4_dispatcher.py`, `test_phase5_control.py`, `test_os_foundation.py`): 100% PASSED.
 
+### 2026-10-12 (Part 3): ML Retraining Pipeline Wiring with 3 Auditor Amendments (Approved by User)
+- **Independent Quant Audit (`independent_quant_auditor`):**
+  1. Unconditionally approved Option 2 (Zero-Disruption Soak) to protect the two active in-flight trades on VM 2 (Overmind BTC Short, Quant ETH Short up +1.47% ROE).
+  2. Approved Option 3 subject to 3 mandatory technical amendments:
+     - *Amendment 1 (Event Loop Starvation Guard):* Offload ML retraining computation to a worker thread via `await asyncio.to_thread(...)` to ensure zero dropped WebSocket frames or SL/TP latency.
+     - *Amendment 2 (SQLite Read-Only Concurrency):* Connect to SQLite using `mode=ro` and 60-second busy timeout in `MicrostructuralFeatureStore.load_raw_data()`.
+     - *Amendment 3 (Degradation Boundary Invariant):* Enforce $N \ge 1,500$ bars threshold before running embargoed Purged K-Fold CV, preserving baseline weights safely when data is insufficient.
+- **Implementation & Wiring Applied:**
+  1. `ml/feature_store.py`: Added read-only URI connection (`?mode=ro`) with `PRAGMA busy_timeout = 60000;`.
+  2. `ml/retraining_engine.py`: Integrated `MicrostructuralFeatureStore` and `train_and_validate_meta_model()` into `run_retraining_cycle()`. Wired `await asyncio.to_thread(self.run_retraining_cycle)` into `run_scheduler_loop()`.
+  3. Zero disruption to Oracle VM 2: Active positions allowed to soak naturally without daemon restarts.
+- **Verification Suites:**
+  - `retraining_engine` unit execution & graceful fallback test: PASSED.
+  - `test_quant_invariants.py`: 5/5 PASSED (100%).
+  - `test_phase4_dispatcher.py`: 4/4 PASSED (100%).
+  - `test_phase5_control.py`: 3/3 PASSED (100%).
+  - `test_os_foundation.py`: 6/6 PASSED (100%).
+
+
 
 
 

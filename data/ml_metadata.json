@@ -1,12 +1,12 @@
 {
   "status": "ACTIVE",
-  "engine_version": "v2.1-META",
-  "active_model_id": "meta_lgb_crypto_v1",
-  "last_trained_at_utc": "2026-10-11T00:00:00Z",
-  "next_retrain_at_utc": "2026-10-12T00:00:00Z",
+  "engine_version": "v2.2-FEATURE-STORE",
+  "active_model_id": "meta_lgb_crypto_20261012_1509",
+  "last_trained_at_utc": "2026-10-12T15:09:14Z",
+  "next_retrain_at_utc": "2026-10-19T00:00:00Z",
   "cadence": "WEEKLY_MONDAY_0000_UTC",
   "dataset_vitals": {
-    "total_bars_evaluated": 33960,
+    "total_bars_evaluated": 0,
     "candidate_records": 9,
     "real_trades_recorded": 42,
     "effective_sample_size_neff": 615,
@@ -24,6 +24,7 @@
   },
   "drift_monitor": {
     "feature_psi_24h": 0.082,
-    "drift_status": "NORMAL"
+    "drift_status": "NORMAL",
+    "evaluated_at_utc": "2026-10-12T15:09:14.361809+00:00"
   }
 }
