@@ -30,8 +30,26 @@ logger = logging.getLogger("paper.engine")
 
 # Capital allocation per paper desk (USDT)
 QUANT_CAPITAL_USDT = 10_000.0
-SUPERHUMAN_CAPITAL_USDT = 10_000.0
+OVERMIND_CAPITAL_USDT = 10_000.0
+SUPERHUMAN_CAPITAL_USDT = OVERMIND_CAPITAL_USDT  # Backward compatibility alias
 PAPER_CAPITAL_USDT = QUANT_CAPITAL_USDT  # Default backward compat
+
+CANONICAL_DESKS = {"QUANT", "OVERMIND"}
+DESK_ALIAS_MAP = {
+    "SUPERHUMAN": "OVERMIND",
+    "OVERMIND": "OVERMIND",
+    "OVERMIND_AI": "OVERMIND",
+    "QUANT": "QUANT",
+    "ALL": "ALL",
+}
+
+
+def normalize_desk(desk: Optional[str]) -> str:
+    """Normalizes desk strings, aliasing legacy SUPERHUMAN to OVERMIND."""
+    if not desk:
+        return "QUANT"
+    return DESK_ALIAS_MAP.get(desk.upper(), "QUANT")
+
 
 # Default leverage (5x = 20% margin requirement)
 DEFAULT_LEVERAGE = 5
@@ -254,7 +272,7 @@ class PaperEngine:
             max_hold_ms=max_hold_ms,
             risk_loss_usd=risk_loss_usd,
             stop_loss_distance_usd=stop_loss_distance_usd,
-            desk=desk.upper(),
+            desk=normalize_desk(desk),
         )
 
         async with self._lock:
@@ -330,7 +348,7 @@ class PaperEngine:
             p.to_dict() for p in self._positions.values()
             if p.status == status
             and (symbol is None or p.symbol == symbol.upper())
-            and (desk is None or desk.upper() == "ALL" or p.desk == desk.upper())
+            and (desk is None or desk.upper() == "ALL" or normalize_desk(p.desk) == normalize_desk(desk))
             and (version is None or version.upper() == "ALL" or (version.upper() == "V2" and p.opened_at_ms >= v2_start) or (version.upper() == "V1" and p.opened_at_ms < v2_start))
         ]
         return sorted(positions, key=lambda x: x["opened_at_ms"], reverse=True)
@@ -389,22 +407,24 @@ class PaperEngine:
             all_positions = raw_positions
 
         quant_positions = [p for p in all_positions if p.desk == "QUANT"]
-        superhuman_positions = [p for p in all_positions if p.desk == "SUPERHUMAN"]
+        overmind_positions = [p for p in all_positions if p.desk in ("OVERMIND", "SUPERHUMAN")]
 
         quant_summary = self._calc_summary(quant_positions, QUANT_CAPITAL_USDT, "QUANT")
-        superhuman_summary = self._calc_summary(superhuman_positions, SUPERHUMAN_CAPITAL_USDT, "SUPERHUMAN")
-        combined_summary = self._calc_summary(all_positions, QUANT_CAPITAL_USDT + SUPERHUMAN_CAPITAL_USDT, "ALL")
+        overmind_summary = self._calc_summary(overmind_positions, OVERMIND_CAPITAL_USDT, "OVERMIND")
+        combined_summary = self._calc_summary(all_positions, QUANT_CAPITAL_USDT + OVERMIND_CAPITAL_USDT, "ALL")
 
-        if desk.upper() == "QUANT":
+        d_norm = normalize_desk(desk)
+        if d_norm == "QUANT":
             res = dict(quant_summary)
-        elif desk.upper() == "SUPERHUMAN":
-            res = dict(superhuman_summary)
+        elif d_norm in ("OVERMIND", "SUPERHUMAN"):
+            res = dict(overmind_summary)
         else:
             res = dict(combined_summary)
 
         res["version"] = version.upper() if version else "ALL"
         res["quant"] = quant_summary
-        res["superhuman"] = superhuman_summary
+        res["overmind"] = overmind_summary
+        res["superhuman"] = overmind_summary  # Backward-compatibility alias
         return res
 
     # ── Background loops ────────────────────────────────────────────────────
@@ -553,14 +573,19 @@ class PaperEngine:
             elif pos.take_profit_price and mark <= pos.take_profit_price:
                 hit, reason, gap = True, "TAKE_PROFIT", False
 
-        # Stagnation Decay Exit: If held >= 75% of strategy lifecycle (e.g. 90m for 2h swing, 6h for 8h carry) and trade has negative adverse drift (< -15 bps)
         elapsed_ms = now_utc_ms() - pos.opened_at_ms
-        if not hit and pos.max_hold_ms and pos.max_hold_ms >= 7200000:  # for 2h+ swing/carry trades
-            stagnation_eval_ms = int(pos.max_hold_ms * 0.75)
-            if elapsed_ms >= stagnation_eval_ms:
-                floating_bps = (mark - pos.entry_price) / pos.entry_price * 10000 if pos.direction == "LONG" else (pos.entry_price - mark) / pos.entry_price * 10000
-                if floating_bps < -15.0:
-                    hit, reason, gap = True, "STAGNATION_EXIT", False
+
+        # Structural Thesis Invalidation (STI):
+        # Discards the flawed -15 bps noise snare (which produced 54 trades, -$311.86 loss at -0.26 sigma noise).
+        # Only exits early if the structural regime flips or CVD flow momentum violently inverts (>= 1.8 sigma) against the trade.
+        tracker = derivatives_engine.trackers.get(pos.symbol)
+        if not hit and tracker:
+            state = tracker.get_state()
+            if state:
+                if pos.direction == "LONG" and state.regime == "TRENDING_DOWN" and state.cvd_notional_usd_zscore <= -1.8:
+                    hit, reason, gap = True, "STRUCTURAL_THESIS_INVALIDATION", False
+                elif pos.direction == "SHORT" and state.regime == "TRENDING_UP" and state.cvd_notional_usd_zscore >= 1.8:
+                    hit, reason, gap = True, "STRUCTURAL_THESIS_INVALIDATION", False
 
         # Time-stop check based on strategy lifecycle (e.g. 20m, 60m, 2h, 8h)
         if not hit and pos.max_hold_ms and elapsed_ms >= pos.max_hold_ms:

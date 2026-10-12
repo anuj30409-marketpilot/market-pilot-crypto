@@ -67,10 +67,11 @@ def evaluate_funding_reversion(
     )
 
     cvd_z = getattr(deriv, "cvd_notional_usd_zscore", 0.0)
-    if is_short and cvd_z >= 0.8:
+    # Macro flow veto: Never short carry into positive buyer flow (> 0.3z) or long carry into negative seller flow (< -0.3z)
+    if is_short and cvd_z > 0.3:
         rejection_codes.append("REJECT_OPPOSING_CVD_MOMENTUM")
         is_short = False
-    elif is_long and cvd_z <= -0.8:
+    elif is_long and cvd_z < -0.3:
         rejection_codes.append("REJECT_OPPOSING_CVD_MOMENTUM")
         is_long = False
 

@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple
 from core.clock import now_utc_ms
 from core.contracts import CandidateRecord
 from collectors.orderbook import BoundedOrderbook
-from paper.paper_engine import paper_engine, PAPER_CAPITAL_USDT, DEFAULT_LEVERAGE
+from paper.paper_engine import paper_engine, PAPER_CAPITAL_USDT, DEFAULT_LEVERAGE, normalize_desk
 from storage.sqlite_store import sqlite_store
 
 logger = logging.getLogger("paper_dispatcher")
@@ -38,9 +38,9 @@ STRATEGY_PROFILES = {
         "leverage": 5,
     },
     "STRAT_ORDERBOOK_MOMENTUM_V1": {
-        "sl_pct": 0.30,
-        "tp_pct": 0.35,
-        "max_hold_ms": 4 * 60 * 1000,  # 4 minutes (calibrated realistic targets vs 5.8-sigma impossibility)
+        "sl_pct": 0.18,
+        "tp_pct": 0.22,
+        "max_hold_ms": 5 * 60 * 1000,  # 5 minutes (honours Invariant 3 alpha decay half-life <= 5m)
         "leverage": 5,
     },
     "STRAT_LIQUIDATION_FADER_V1": {
@@ -293,8 +293,8 @@ class PaperDispatcher:
         symbol = candidate.symbol.upper()
         strat_id = candidate.strategy_id
 
-        # Determine desk: QUANT or SUPERHUMAN
-        desk = "SUPERHUMAN" if getattr(candidate, "origin", "QUANT").upper() == "SUPERHUMAN" else "QUANT"
+        # Determine desk: QUANT or OVERMIND
+        desk = normalize_desk(getattr(candidate, "origin", "QUANT"))
 
         # 1. Fetch current portfolio state
         summary = paper_engine.get_summary(desk=desk)
@@ -354,8 +354,14 @@ class PaperDispatcher:
             candidate.candidate_id, strat_id, symbol, direction, desk, notional_usdt, risk_loss_usd, DEFAULT_RISK_PER_TRADE_PCT
         )
 
-        # Strategy execution style: S1 carry trades use passive MAKER limits (cuts fee by 50%), momentum uses TAKER
-        order_type = "MAKER" if strat_id == "STRAT_FUNDING_REVERSION_V1" else "TAKER"
+        # Strategy execution style:
+        # S1 (Funding Carry), SH4 (Overmind Swing), and S2 (Orderbook Scalper) use passive MAKER limits (cuts entry fee by 50%)
+        MAKER_STRATEGIES = {
+            "STRAT_FUNDING_REVERSION_V1",
+            "STRAT_SUPERHUMAN_SWING_V1",
+            "STRAT_ORDERBOOK_MOMENTUM_V1",
+        }
+        order_type = "MAKER" if strat_id in MAKER_STRATEGIES else "TAKER"
 
         exec_result = await paper_engine.open_position(
             symbol=symbol,

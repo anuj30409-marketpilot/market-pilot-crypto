@@ -144,5 +144,35 @@
   3. Dispatcher and Control test suites: 100% passed.
 - **Deployment Status:** NOT DEPLOYED. Local only. User executes deploy per INV-OPS-001.
 
+### 2026-10-12: Overmind AI Rebrand, Structural Thesis Invalidation (STI) & Scalper/Maker Calibration (Approved by User)
+- **Trade Forensics (310 Trades, 14 Days on Oracle VM 2):**
+  1. Quant Desk: 180 trades, 30.0% win rate, Gross -$294.13, Fees $202.16, Net -$496.29.
+  2. Superhuman Desk: 130 trades, 36.15% win rate, **Gross +$13.19 (RAW POSITIVE ALPHA)**, Fees $130.07, Net -$116.87.
+  3. Total Taker Fees: $332.23 (54.2% of the entire net drawdown of -$613.16).
+  4. Stagnation Exit Anomaly: 54 trades, **Net -$311.86** (Avg -$5.78/trade, **11.1% win rate, 50.8% of total desk drawdown**).
+- **Independent Quant Audit (`independent_quant_auditor`):**
+  1. Brownian Motion Proof on Stagnation Exit: $\sigma_{90m} \approx 57\text{ bps}$. A -15 bps exit is a $-0.263\sigma$ noise snare ($P \le -0.263 \approx 39.6\%$). Cut 40% of purely random paths, systematically killing winning swing positions. Replaced with Structural Thesis Invalidation (STI).
+  2. Orderbook Scalper S2 Mismatch Proof: Over 4m, $\sigma_{4m} \approx 12\text{ bps}$. An 80 bps TP is an impossible $6.7\sigma$ tail event, while 35 bps is $2.92\sigma$ ($P \le 0.18\%$). 100% of trades hit 4m TIME_STOP and bleed 8 bps taker fees. Calibrated to 22 bps TP / 18 bps SL with Maker fills over 5m horizon.
+- **Architectural & Code Changes Applied:**
+  1. **Overmind AI Rebrand & Canonical Aliasing:**
+     - `paper/paper_engine.py`: Added `OVERMIND_CAPITAL_USDT = 10_000.0`, aliased `SUPERHUMAN_CAPITAL_USDT`. Implemented `normalize_desk()` mapping `SUPERHUMAN`, `OVERMIND`, and `OVERMIND_AI` to `"OVERMIND"`. Updated `get_summary()` and `get_positions()` to aggregate and alias historical rows seamlessly.
+     - `storage/sqlite_store.py`: Added idempotent DB migration in `_init_db()` migrating `desk = 'SUPERHUMAN'` to `'OVERMIND'` while supporting `IN ('OVERMIND', 'SUPERHUMAN')` queries.
+     - Frontend (`frontend-v3`): Updated `CryptoPaperDesk.tsx`, `CryptoPaperDesk.css`, and `crypto-paper-api.ts` with Overmind AI branding, tags, buttons, and backward-compatible rendering for all historical trades.
+  2. **Structural Thesis Invalidation (STI):**
+     - `paper/paper_engine.py`: Eliminated the static -15 bps noise snare. Early exits now occur only when the structural market regime flips (e.g. LONG into `TRENDING_DOWN`) with aggressive opposing orderflow momentum ($|\text{CVD } z\text{-score}| \ge 1.8$).
+  3. **Passive Maker Queue Execution Expansion:**
+     - `paper/dispatcher.py`: Expanded Maker execution to `STRAT_SUPERHUMAN_SWING_V1` and `STRAT_ORDERBOOK_MOMENTUM_V1` alongside `STRAT_FUNDING_REVERSION_V1`, slashing entry fees by 50% (from 4.0 bps to 2.0 bps) with realistic adverse selection penalties.
+  4. **Strategy S1 Macro Trend Veto Gate:**
+     - `strategies/funding_reversion.py`: Tightened CVD momentum hurdle from 0.8 to 0.3 (`cvd_z > 0.3` on short, `cvd_z < -0.3` on long) to prevent counter-trend carry positions into bull/bear market momentum breakouts.
+  5. **Strategy S2 Calibration:**
+     - `paper/dispatcher.py`: Calibrated S2 to `sl_pct = 0.18%`, `tp_pct = 0.22%`, `max_hold_ms = 5m` with Maker fills to honor Invariant 3 (alpha decay half-life <= 5m).
+- **Verification Suites:**
+  - `test_quant_invariants.py`: 5/5 PASSED (100%).
+  - `test_phase4_dispatcher.py`: 4/4 PASSED (100%).
+  - `test_phase5_control.py`: 3/3 PASSED (100%).
+  - `test_os_foundation.py`: 6/6 PASSED (100%).
+  - Vite Frontend Build: PASSED (0 errors, 2.17s).
+- **Deployment Status:** NOT DEPLOYED. Local verification complete. Ready for human deployment instruction per INV-OPS-001.
+
 
 

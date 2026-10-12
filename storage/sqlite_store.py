@@ -184,6 +184,14 @@ class SQLiteStore:
             self._add_column_if_missing(conn, "crypto_paper_positions", "stop_loss_distance_usd", "REAL DEFAULT 0.0")
             self._add_column_if_missing(conn, "crypto_paper_positions", "desk", "TEXT DEFAULT 'QUANT'")
 
+            # Overmind AI Desk Migration (idempotent update preserving historical provenance)
+            table_check = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='crypto_paper_positions'").fetchone()
+            if table_check:
+                conn.execute("UPDATE crypto_paper_positions SET desk = 'OVERMIND' WHERE desk = 'SUPERHUMAN'")
+            cand_check = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='crypto_candidate_ledger'").fetchone()
+            if cand_check:
+                conn.execute("UPDATE crypto_candidate_ledger SET origin = 'OVERMIND' WHERE origin = 'SUPERHUMAN'")
+
             conn.commit()
 
     def upsert_candle(self, c: Candle1m):
@@ -517,8 +525,12 @@ class SQLiteStore:
                 clauses.append("status = ?")
                 params.append(status.upper())
             if desk and desk.upper() != "ALL":
-                clauses.append("desk = ?")
-                params.append(desk.upper())
+                d_up = desk.upper()
+                if d_up in ("OVERMIND", "OVERMIND_AI", "SUPERHUMAN"):
+                    clauses.append("desk IN ('OVERMIND', 'SUPERHUMAN')")
+                else:
+                    clauses.append("desk = ?")
+                    params.append(d_up)
             if version and version.upper() == "V2":
                 clauses.append("opened_at_ms >= 1791268500000")
             elif version and version.upper() == "V1":
