@@ -28,6 +28,7 @@ git pull origin main && \
 .venv/bin/python scripts/test_phase4_dispatcher.py && \
 .venv/bin/python scripts/test_phase5_control.py && \
 .venv/bin/python scripts/test_quant_invariants.py && \
+.venv/bin/python scripts/test_crypto_copilot.py && \
 sudo systemctl restart crypto-pilot.service && \
 sleep 5 && \
 sudo systemctl status crypto-pilot.service --no-pager -l && \
