@@ -157,6 +157,9 @@ def get_capital_readiness():
     return capital_readiness_service.get_readiness_report()
 
 
+from paper.trade_copilot import evaluate_crypto_copilot
+
+
 @app.get("/paper/positions")
 def get_paper_positions(
     symbol: Optional[str] = Query(None),
@@ -166,8 +169,17 @@ def get_paper_positions(
     limit: int = Query(50, ge=1, le=200),
 ):
     """Returns paper positions from database (persisted across restarts)."""
+    positions = sqlite_store.get_paper_positions(symbol=symbol, status=status, desk=desk, version=version, limit=limit)
+    if status != "CLOSED":
+        for p in positions:
+            if p.get("status") == "OPEN":
+                sym = p.get("symbol")
+                tracker = derivatives_engine.trackers.get(sym) if hasattr(derivatives_engine, "trackers") else None
+                ob = collector.orderbooks.get(sym) if hasattr(collector, "orderbooks") else None
+                p["copilot"] = evaluate_crypto_copilot(p, tracker, ob).to_dict()
+
     return {
-        "positions": sqlite_store.get_paper_positions(symbol=symbol, status=status, desk=desk, version=version, limit=limit),
+        "positions": positions,
         "summary": paper_engine.get_summary(desk=desk or "ALL", version=version or "ALL"),
     }
 
@@ -178,9 +190,16 @@ def get_live_paper_positions(
     desk: Optional[str] = Query(None, description="QUANT | SUPERHUMAN | ALL"),
     version: Optional[str] = Query("ALL", description="V2 | ALL | V1"),
 ):
-    """Returns live in-memory open positions with real-time unrealised PnL."""
+    """Returns live in-memory open positions with real-time unrealised PnL and AI copilot telemetry."""
+    positions = paper_engine.get_positions(symbol=symbol, status="OPEN", desk=desk, version=version)
+    for p in positions:
+        sym = p.get("symbol")
+        tracker = derivatives_engine.trackers.get(sym) if hasattr(derivatives_engine, "trackers") else None
+        ob = collector.orderbooks.get(sym) if hasattr(collector, "orderbooks") else None
+        p["copilot"] = evaluate_crypto_copilot(p, tracker, ob).to_dict()
+
     return {
-        "positions": paper_engine.get_positions(symbol=symbol, status="OPEN", desk=desk, version=version),
+        "positions": positions,
         "summary": paper_engine.get_summary(desk=desk or "ALL", version=version or "ALL"),
     }
 

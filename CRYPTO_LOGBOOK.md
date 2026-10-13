@@ -238,7 +238,38 @@
   - `test_phase4_dispatcher.py`: 4/4 PASSED (100%).
   - `test_phase5_control.py`: 3/3 PASSED (100%).
   - `test_os_foundation.py`: 6/6 PASSED (100%).
+### 2026-10-13 (Part 2): Crypto Microstructure AI Trade Copilot Engine (Approved by User)
+- **Problem & Context:**
+  1. User proposed deploying a copilot agent similar to Market Pilot Indian desk to monitor live trades and provide real-time trade management.
+  2. Indian desk Copilot was built for NSE options/equities (Greeks, strike clusters, 15:30 close) and was not suited for 24/7 crypto perpetuals.
+- **Independent Quant Audit (`independent_quant_auditor`):**
+  1. *Approved with 3 Mandatory Guardrails:*
+     - *Guardrail 1 (Governance Authority):* Phase 1 is 100% purely advisory; `paper_engine.py` remains sole master of order state and exits (prevents split-brain race conditions).
+     - *Guardrail 2 (Horizon-Stratified Adaptive Weights):* Score components stratified by strategy horizon:
+       * Scalp (S2, 5m): Flow 35%, Book 35%, PnL 20%, Funding 0%, Lifecycle 10%.
+       * Swing (SH4/S4, 3h): Flow 35%, Book 15%, PnL 30%, Funding 5%, Lifecycle 15%.
+       * Macro Carry (S1/SH1, 4h–8h): Flow 20%, Book 5%, PnL 25%, Funding 35%, Lifecycle 15%.
+     - *Guardrail 3 (Zero-Latency Pull Architecture):* On-demand evaluation upon API polling without background thread or tick loop hooks.
+- **Changes Applied:**
+  1. `paper/trade_copilot.py`:
+     - Built `CryptoCopilotState` and `evaluate_crypto_copilot(position, tracker, orderbook)`.
+     - Computes dynamic composite Health Score ($0–100\%$) and action states (`HOLD_CONVICTION`, `RATCHET_PRIMED`, `ARMOR_LOCKED`, `DEFENSE_DIVERGENCE`, `STI_EARLY_WARNING`, `HARVEST_RUNNER`).
+     - Emits color-coded telemetry crumbs (`[CVD Flow]`, `[Book Queue]`, `[Funding Carry]`, `[Ratchet]`).
+  2. `api/server.py`:
+     - Augmented `/paper/positions` and `/paper/positions/live` with on-demand `copilot` telemetry attached to all open positions.
+  3. Frontend (`frontend-v3` in `market-pilot`):
+     - `crypto-paper-api.ts`: Added `CryptoCopilotState` and `CryptoCopilotCrumb` interfaces.
+     - `CryptoPaperDesk.tsx`: Integrated interactive `🤖 AI Copilot Strip` under `OpenRow` with dynamic health badge, action pill, level cards (Stop / Target / Locked profit), and telemetry breadcrumbs.
+     - `CryptoPaperDesk.css`: Added styles for copilot strip, toggle button, badges, and responsive dark/light theme support.
+- **Verification Suites:**
+  - `scripts/test_crypto_copilot.py`: 4/4 PASSED (100%). Latency benchmark: **0.0112 ms per evaluation** (89,013 evaluations/sec, $45\times$ faster than 0.5 ms limit).
+  - `test_quant_invariants.py`: 5/5 PASSED (100%).
+  - `test_phase4_dispatcher.py`: 4/4 PASSED (100%).
+  - `test_phase5_control.py`: 3/3 PASSED (100%).
+  - `test_os_foundation.py`: 6/6 PASSED (100%).
+  - Vite Frontend Build: PASSED (0 errors, 4.93s).
 - **Deployment Status:** NOT DEPLOYED. Local verification clean. Awaiting user deployment instruction per INV-OPS-001.
+
 
 
 
