@@ -53,8 +53,8 @@ async def run_phase4_tests():
             entry_price=mid_price
         )
         expected_risk_loss = notional * ((sl_pct / 100.0) + (0.13 / 100.0))
-        assert notional <= 2500.0, f"Notional ${notional} exceeded max $2500 cap!"
-        assert expected_risk_loss <= 26.0, f"Risk loss ${expected_risk_loss} exceeded $26 risk budget target!"
+        assert notional <= 4000.0, f"Notional ${notional} exceeded max $4000 cap!"
+        assert expected_risk_loss <= 52.0, f"Risk loss ${expected_risk_loss} exceeded $52 risk budget target!"
         assert max_hold == 5 * 60 * 1000, "S2 max hold must be 5 minutes"
         print("      [OK] Risk-as-loss position sizing and notional cap verified.")
 
@@ -71,10 +71,10 @@ async def run_phase4_tests():
         )
         assert not allowed and "MAX_CONCURRENT_EXCEEDED" in reason, f"Should reject 5th position: {reason}"
 
-        # 2b. Daily Drawdown Circuit Breaker
+        # 2b. Daily Drawdown Circuit Breaker (2.5% of $10k = -$250)
         fake_closed_losses = [
-            {"realised_pnl": -120.0, "closed_at_ms": now_ms - 1000},
-            {"realised_pnl": -90.0, "closed_at_ms": now_ms - 2000},
+            {"realised_pnl": -150.0, "closed_at_ms": now_ms - 1000},
+            {"realised_pnl": -120.0, "closed_at_ms": now_ms - 2000},
         ]
         allowed, reason = risk_ctrl.check_portfolio_limits(
             symbol="BTCUSDT", direction="LONG", candidate_notional=500.0,

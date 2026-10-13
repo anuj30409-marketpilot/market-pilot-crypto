@@ -210,6 +210,37 @@
   - `test_phase5_control.py`: 3/3 PASSED (100%).
   - `test_os_foundation.py`: 6/6 PASSED (100%).
 
+### 2026-10-13: Institutional Target Realignment, Tenth-Kelly Scaling & Tier-3 Profit Ratchet (Approved by User)
+- **Problem & Context:**
+  1. Live soak performance (past 23 hours on Oracle VM 2 across 18 trades) proved positive expectancy: 61.1% Win Rate (70% Quant / 50% Overmind AI), Net +$114.06, 0 stagnation exits, 50% Maker execution, and +$5.51 net on stop-outs due to ratchets.
+  2. Defensive "training wheels" settings (0.25% risk budget = $25 on $10k, 1.20% TP) were capping potential alpha and underallocating capital.
+- **Independent Quant Audit (`independent_quant_auditor`):**
+  1. *Fractional Kelly Proof:* Realized metrics ($p = 0.611$, $b = 2.292$) yield full Kelly $f^* = 44.1\%$. Institutional Tenth-Kelly across 8 strategies is $0.55\%$ per trade. Bumping risk from $0.25\% \to 0.50\%$ ($50 per trade on $10k) is mathematically optimal.
+  2. *Volatility Diffusion Boundary:* Expanding Swing TP from 120 bps to 160–200 bps requires extending max hold from 120m to 180m–240m (3–4 hours), because 180 bps is a $2.74\sigma$ tail event ($P < 4.2\%$) in 2 hours.
+  3. *Tier-3 Profit Ratchet:* At $+140\text{ bps}$ floating, ratchet SL to **Entry + 100 bps** (locks $+87\text{ bps}$ net profit), while letting TP run risk-free to **+200 bps (2.00%)**. Achieves 94% of partial-scale-out economics with zero SQLite schema risk.
+- **Changes Applied:**
+  1. `paper/dispatcher.py`:
+     - Scaled `DEFAULT_RISK_PER_TRADE_PCT` from $0.25\% \to 0.50\%$.
+     - Raised `MAX_POSITION_NOTIONAL_USDT` from $2,500 \to $4,000$.
+     - Expanded `DAILY_DRAWDOWN_LIMIT_PCT` from $2.00\% \to 2.50\%$.
+     - Realigned `STRATEGY_PROFILES`:
+       * `STRAT_SWING_MOMENTUM_V1`: SL 0.60% / TP 1.60% ($2.67:1$), max hold 180m (3h).
+       * `STRAT_SUPERHUMAN_SWING_V1`: SL 0.60% / TP 1.60% ($2.67:1$), max hold 180m (3h).
+       * `STRAT_SUPERHUMAN_MACRO_REGIME_V1`: SL 0.75% / TP 2.00% ($2.67:1$), max hold 240m (4h).
+       * `STRAT_FUNDING_REVERSION_V1`: SL 0.75% / TP 1.90% ($2.53:1$), max hold 8h.
+       * `STRAT_ORDERBOOK_MOMENTUM_V1`: SL 0.18% / TP 0.25% ($1.39:1$), max hold 5m.
+  2. `paper/paper_engine.py`:
+     - Implemented Tier-3 Trailing Profit Ratchet (+140 bps floating $\implies$ lock Entry $\pm$ 100 bps) for both LONG and SHORT.
+  3. `scripts/test_quant_invariants.py` & `scripts/test_phase4_dispatcher.py`:
+     - Added Tier 3 to `RATCHET_TIERS` and updated fixtures for 0.50% risk, $4,000 notional, and 2.50% DD limit.
+- **Verification Suites:**
+  - `test_quant_invariants.py`: 5/5 PASSED (100%).
+  - `test_phase4_dispatcher.py`: 4/4 PASSED (100%).
+  - `test_phase5_control.py`: 3/3 PASSED (100%).
+  - `test_os_foundation.py`: 6/6 PASSED (100%).
+- **Deployment Status:** NOT DEPLOYED. Local verification clean. Awaiting user deployment instruction per INV-OPS-001.
+
+
 
 
 

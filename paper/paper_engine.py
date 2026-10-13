@@ -531,15 +531,22 @@ class PaperEngine:
         reason = ""
         gap = False
 
-        # Two-Tier Dynamic Ratchet (Auditor Calibrated Invariants):
+        # Three-Tier Dynamic Ratchet (Auditor Calibrated Invariants):
         # Tier 1 (+60 bps floating profit): Ratchet SL to Entry + 22 bps (locks +9 bps net profit after all fees & slippage)
         # Tier 2 (+95 bps floating profit): Ratchet SL to Entry + 60 bps (locks +47 bps net profit)
+        # Tier 3 (+140 bps floating profit): Ratchet SL to Entry + 100 bps (locks +87 bps net profit, runs risk-free to 2.0% TP)
         if pos.direction == "LONG":
             t1_sl = pos.entry_price * 1.0022  # Entry + 22 bps net profit lock
             t2_sl = pos.entry_price * 1.0060  # Entry + 60 bps net profit lock
+            t3_sl = pos.entry_price * 1.0100  # Entry + 100 bps net profit lock
 
+            # Tier 3 check (+140 bps)
+            if mark >= pos.entry_price * 1.0140 and (not pos.stop_loss_price or pos.stop_loss_price < t3_sl):
+                pos.stop_loss_price = t3_sl
+                sqlite_store.upsert_paper_position(pos.to_dict())
+                logger.info(f"[PAPER RATCHET TIER-3] {pos.symbol} LONG SL raised to lock in +100bps profit @ {pos.stop_loss_price:.2f}")
             # Tier 2 check (+95 bps)
-            if mark >= pos.entry_price * 1.0095 and (not pos.stop_loss_price or pos.stop_loss_price < t2_sl):
+            elif mark >= pos.entry_price * 1.0095 and (not pos.stop_loss_price or pos.stop_loss_price < t2_sl):
                 pos.stop_loss_price = t2_sl
                 sqlite_store.upsert_paper_position(pos.to_dict())
                 logger.info(f"[PAPER RATCHET TIER-2] {pos.symbol} LONG SL raised to lock in +60bps profit @ {pos.stop_loss_price:.2f}")
@@ -556,9 +563,15 @@ class PaperEngine:
         else:
             t1_sl = pos.entry_price * 0.9978  # Entry - 22 bps net profit lock
             t2_sl = pos.entry_price * 0.9940  # Entry - 60 bps net profit lock
+            t3_sl = pos.entry_price * 0.9900  # Entry - 100 bps net profit lock
 
+            # Tier 3 check (+140 bps short)
+            if mark <= pos.entry_price * 0.9860 and (not pos.stop_loss_price or pos.stop_loss_price > t3_sl):
+                pos.stop_loss_price = t3_sl
+                sqlite_store.upsert_paper_position(pos.to_dict())
+                logger.info(f"[PAPER RATCHET TIER-3] {pos.symbol} SHORT SL lowered to lock in +100bps profit @ {pos.stop_loss_price:.2f}")
             # Tier 2 check (+95 bps short)
-            if mark <= pos.entry_price * 0.9905 and (not pos.stop_loss_price or pos.stop_loss_price > t2_sl):
+            elif mark <= pos.entry_price * 0.9905 and (not pos.stop_loss_price or pos.stop_loss_price > t2_sl):
                 pos.stop_loss_price = t2_sl
                 sqlite_store.upsert_paper_position(pos.to_dict())
                 logger.info(f"[PAPER RATCHET TIER-2] {pos.symbol} SHORT SL lowered to lock in +60bps profit @ {pos.stop_loss_price:.2f}")

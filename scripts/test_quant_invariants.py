@@ -17,6 +17,7 @@ NOISE_FLOOR_1M_BPS_95 = 15.0
 RATCHET_TIERS = [
     {"name": "Tier 1", "trigger_bps": 60.0, "lock_bps": 22.0},
     {"name": "Tier 2", "trigger_bps": 95.0, "lock_bps": 60.0},
+    {"name": "Tier 3", "trigger_bps": 140.0, "lock_bps": 100.0},
 ]
 
 # Stagnation parameters
@@ -89,8 +90,8 @@ def test_risk_as_loss_sizing_preserves_capital():
         friction_pct = ESTIMATED_ROUNDTRIP_FRICTION_PCT
         total_loss_pct = (sl_pct + friction_pct) / 100.0
         
-        # For $10k equity and 0.25% risk budget ($25):
-        risk_budget_usd = 10000.0 * 0.0025
+        # For $10k equity and 0.50% risk budget ($50):
+        risk_budget_usd = 10000.0 * 0.0050
         computed_notional = risk_budget_usd / total_loss_pct
         simulated_loss = computed_notional * total_loss_pct
 

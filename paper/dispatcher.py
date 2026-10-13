@@ -18,28 +18,28 @@ logger = logging.getLogger("paper_dispatcher")
 
 # ── Institutional Risk Configuration ─────────────────────────────────────────
 
-DEFAULT_RISK_PER_TRADE_PCT = 0.25  # 0.25% of equity ($25.00 on $10,000 account)
+DEFAULT_RISK_PER_TRADE_PCT = 0.50  # 0.50% of equity ($50.00 on $10,000 account)
 ESTIMATED_ROUNDTRIP_FRICTION_PCT = 0.13  # 13 bps (fees + slippage)
 MAX_GROSS_NOTIONAL_PCT = 200.0  # 200% gross exposure max ($20,000 on $10k)
 MAX_NET_DIRECTIONAL_PCT = 100.0  # 100% net long/short max ($10,000 on $10k)
 MAX_CONCURRENT_POSITIONS = 4
 MAX_POSITIONS_PER_SYMBOL = 1   # Strict Asset Mutex: Max 1 position per asset across ALL desks
-MAX_POSITION_NOTIONAL_USDT = 2500.0  # 25% max equity notional cap to avoid fee explosion
-DAILY_DRAWDOWN_LIMIT_PCT = 2.0  # 2.0% daily DD circuit breaker ($200 on $10k)
+MAX_POSITION_NOTIONAL_USDT = 4000.0  # 40% max equity notional cap ($4,000 on $10k)
+DAILY_DRAWDOWN_LIMIT_PCT = 2.50  # 2.50% daily DD circuit breaker ($250 on $10k)
 CONSECUTIVE_LOSS_LIMIT = 3
 COOLDOWN_AFTER_LOSSES_MS = 4 * 3600 * 1000  # 4 hours
 
 # Strategy-specific risk & lifecycle profiles
 STRATEGY_PROFILES = {
     "STRAT_FUNDING_REVERSION_V1": {
-        "sl_pct": 0.80,
-        "tp_pct": 1.50,
-        "max_hold_ms": 8 * 3600 * 1000,  # 8 hours
+        "sl_pct": 0.75,
+        "tp_pct": 1.90,
+        "max_hold_ms": 8 * 3600 * 1000,  # 8 hours carry horizon
         "leverage": 5,
     },
     "STRAT_ORDERBOOK_MOMENTUM_V1": {
         "sl_pct": 0.18,
-        "tp_pct": 0.22,
+        "tp_pct": 0.25,
         "max_hold_ms": 5 * 60 * 1000,  # 5 minutes (honours Invariant 3 alpha decay half-life <= 5m)
         "leverage": 5,
     },
@@ -50,9 +50,9 @@ STRATEGY_PROFILES = {
         "leverage": 5,
     },
     "STRAT_SUPERHUMAN_MACRO_REGIME_V1": {
-        "sl_pct": 0.80,
-        "tp_pct": 1.60,
-        "max_hold_ms": 120 * 60 * 1000,  # 2 hours
+        "sl_pct": 0.75,
+        "tp_pct": 2.00,
+        "max_hold_ms": 240 * 60 * 1000,  # 4 hours (allows 200 bps macro move to develop)
         "leverage": 5,
     },
     "STRAT_SUPERHUMAN_CROSS_VENUE_V1": {
@@ -69,14 +69,14 @@ STRATEGY_PROFILES = {
     },
     "STRAT_SWING_MOMENTUM_V1": {
         "sl_pct": 0.60,
-        "tp_pct": 1.20,
-        "max_hold_ms": 120 * 60 * 1000,  # 2 hours
+        "tp_pct": 1.60,
+        "max_hold_ms": 180 * 60 * 1000,  # 3 hours (volatility diffusion envelope for 160 bps)
         "leverage": 5,
     },
     "STRAT_SUPERHUMAN_SWING_V1": {
         "sl_pct": 0.60,
-        "tp_pct": 1.20,
-        "max_hold_ms": 120 * 60 * 1000,  # 2 hours
+        "tp_pct": 1.60,
+        "max_hold_ms": 180 * 60 * 1000,  # 3 hours (captures 15m EMA pullback extensions)
         "leverage": 5,
     },
 }
