@@ -173,6 +173,96 @@ def test_copilot_latency_benchmark():
     print(f"  [OK] Test 4: Latency benchmark passed: {avg_ms:.4f} ms per evaluation ({N/elapsed:.0f} evals/sec).")
 
 
+def test_copilot_phase2_streak_thresholds():
+    """Verify Auditor Amendment 1: Horizon-stratified streak matrix."""
+    from paper.trade_copilot import get_strategy_streak_thresholds
+
+    # Scalper: 5m
+    t1_s, t2_s, max_loss_s = get_strategy_streak_thresholds("STRAT_ORDERBOOK_MOMENTUM_V1", 300_000)
+    assert (t1_s, t2_s, max_loss_s) == (60, 90, -18.0), f"Scalper matrix mismatch: {(t1_s, t2_s, max_loss_s)}"
+
+    # Swing: 3h
+    t1_sw, t2_sw, max_loss_sw = get_strategy_streak_thresholds("STRAT_SWING_MOMENTUM_V1", 10_800_000)
+    assert (t1_sw, t2_sw, max_loss_sw) == (120, 240, -30.0), f"Swing matrix mismatch: {(t1_sw, t2_sw, max_loss_sw)}"
+
+    # Macro: 4h
+    t1_m, t2_m, max_loss_m = get_strategy_streak_thresholds("STRAT_SUPERHUMAN_MACRO_REGIME_V1", 14_400_000)
+    assert (t1_m, t2_m, max_loss_m) == (180, 360, -35.0), f"Macro matrix mismatch: {(t1_m, t2_m, max_loss_m)}"
+
+    # Carry: 8h
+    t1_c, t2_c, max_loss_c = get_strategy_streak_thresholds("STRAT_FUNDING_REVERSION_V1", 28_800_000)
+    assert (t1_c, t2_c, max_loss_c) == (300, 480, -40.0), f"Carry matrix mismatch: {(t1_c, t2_c, max_loss_c)}"
+
+    print("  [OK] Test 5: Horizon-stratified streak thresholds (Amendment 1) verified.")
+
+
+def test_copilot_phase2_defensive_policy_hook():
+    """Verify Auditor Amendments 2 & 3: Clamped Tier-1 tightening and Tier-2 immediate scratch."""
+    from paper.paper_engine import paper_engine, PaperPosition
+    from config.settings import settings
+    from collectors.derivatives import derivatives_engine
+
+    # Mock hostile derivatives tracker on BTCUSDT
+    derivatives_engine.trackers["BTCUSDT"] = MockDerivativesTracker(
+        cvd_z=-2.2, funding_rate=0.0001, regime="RANGE"
+    )
+
+    from core.clock import now_utc_ms
+    now_ms = now_utc_ms()
+    pos = PaperPosition(
+        position_id="test-copilot-phase2-pos",
+        symbol="BTCUSDT",
+        direction="LONG",
+        notional_usdt=2000.0,
+        leverage=5,
+        entry_price=80000.0,
+        entry_slippage_bps=1.0,
+        entry_fee_usdt=0.80,
+        margin_usdt=400.0,
+        mark_price=79880.0,  # -15 bps floating
+        opened_at_ms=now_ms - 60_000,
+        max_hold_ms=10_800_000,
+        strategy_id="STRAT_SWING_MOMENTUM_V1",
+        stop_loss_price=79520.0,  # -60 bps initial SL
+        take_profit_price=81280.0,
+    )
+    pos.update_mark(79880.0)
+
+    # 1. Advisory Mode: Stress condition does NOT mutate SL or exit
+    settings.COPILOT_EXECUTION_MODE = "ADVISORY"
+    pos.defense_stress_streak_s = 300
+    paper_engine._check_sl_tp(pos)
+    assert pos.status == "OPEN", "In ADVISORY mode, position must remain OPEN!"
+
+    # 2. Active Defense Mode: Tier 1 Soft Tighten (at streak >= 120s)
+    settings.COPILOT_EXECUTION_MODE = "ACTIVE_DEFENSE"
+    pos.defense_stress_streak_s = 120
+    pos.defense_tier1_applied = False
+    paper_engine._check_sl_tp(pos)
+
+    assert pos.status == "OPEN", "At Tier-1 streak, position should remain OPEN!"
+    assert pos.defense_tier1_applied is True, "defense_tier1_applied must be set to True!"
+    # Verify Amendment 2: Must be clamped with >= 20 bps buffer from current mark price (79880.0)
+    max_allowed_sl = 79880.0 * (1.0 - 0.0020)  # At least 20 bps below mark
+    assert pos.stop_loss_price <= max_allowed_sl, (
+        f"SL {pos.stop_loss_price} must be at least 20 bps below mark {79880.0} (<= {max_allowed_sl})!"
+    )
+    assert pos.stop_loss_price > 79520.0, "SL must be tightened above initial 79520.0!"
+
+    # 3. Active Defense Mode: Tier 2 Defensive Scratch (at streak >= 240s)
+    pos.defense_stress_streak_s = 245
+    paper_engine._check_sl_tp(pos)
+
+    assert pos.status == "CLOSED", "At Tier-2 streak (245s >= 240s), position must be CLOSED!"
+    assert pos.exit_reason == "COPILOT_DEFENSIVE_SCRATCH", (
+        f"Expected COPILOT_DEFENSIVE_SCRATCH, got {pos.exit_reason}"
+    )
+
+    # Reset setting
+    settings.COPILOT_EXECUTION_MODE = "ADVISORY"
+    print("  [OK] Test 6: Copilot Phase 2 Clamped SL Tighten & Defensive Scratch (Amendments 2 & 3) verified.")
+
+
 def run_all_copilot_tests():
     print("=" * 60)
     print("Running Crypto Microstructure AI Trade Copilot Test Suite")
@@ -181,6 +271,8 @@ def run_all_copilot_tests():
     test_copilot_ratchet_state_machine()
     test_copilot_sti_and_divergence_defense()
     test_copilot_latency_benchmark()
+    test_copilot_phase2_streak_thresholds()
+    test_copilot_phase2_defensive_policy_hook()
     print("=" * 60)
     print("ALL CRYPTO COPILOT VERIFICATION TESTS PASSED (100%)")
     print("=" * 60)
@@ -188,3 +280,4 @@ def run_all_copilot_tests():
 
 if __name__ == "__main__":
     run_all_copilot_tests()
+

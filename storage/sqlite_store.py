@@ -423,7 +423,9 @@ class SQLiteStore:
                 max_hold_ms       INTEGER,
                 risk_loss_usd     REAL DEFAULT 0.0,
                 stop_loss_distance_usd REAL DEFAULT 0.0,
-                desk              TEXT NOT NULL DEFAULT 'QUANT'
+                desk              TEXT NOT NULL DEFAULT 'QUANT',
+                defense_stress_streak_s INTEGER DEFAULT 0,
+                defense_tier1_applied INTEGER DEFAULT 0
             );
 
             CREATE INDEX IF NOT EXISTS idx_paper_pos_symbol_status
@@ -432,6 +434,11 @@ class SQLiteStore:
             CREATE INDEX IF NOT EXISTS idx_paper_pos_desk
             ON crypto_paper_positions (desk, status, opened_at_ms DESC);
             """)
+
+            # Run migrations for paper positions
+            self._add_column_if_missing(conn, "crypto_paper_positions", "defense_stress_streak_s", "INTEGER DEFAULT 0")
+            self._add_column_if_missing(conn, "crypto_paper_positions", "defense_tier1_applied", "INTEGER DEFAULT 0")
+
             conn.commit()
 
     def upsert_paper_position(self, p: dict):
@@ -445,6 +452,8 @@ class SQLiteStore:
         payload.setdefault("risk_loss_usd", 0.0)
         payload.setdefault("stop_loss_distance_usd", 0.0)
         payload.setdefault("desk", "QUANT")
+        payload.setdefault("defense_stress_streak_s", 0)
+        payload.setdefault("defense_tier1_applied", 0)
 
         with self._get_connection() as conn:
             conn.execute("""
@@ -457,7 +466,7 @@ class SQLiteStore:
                 opened_at_ms, closed_at_ms, last_funding_at_ms,
                 strategy_id, candidate_id, signal_score, expected_edge_bps,
                 regime, max_hold_ms, risk_loss_usd, stop_loss_distance_usd,
-                desk
+                desk, defense_stress_streak_s, defense_tier1_applied
             ) VALUES (
                 :position_id, :symbol, :direction, :notional_usdt, :leverage,
                 :entry_price, :entry_slippage_bps, :entry_fee_usdt, :margin_usdt,
@@ -467,7 +476,7 @@ class SQLiteStore:
                 :opened_at_ms, :closed_at_ms, :last_funding_at_ms,
                 :strategy_id, :candidate_id, :signal_score, :expected_edge_bps,
                 :regime, :max_hold_ms, :risk_loss_usd, :stop_loss_distance_usd,
-                :desk
+                :desk, :defense_stress_streak_s, :defense_tier1_applied
             )
             ON CONFLICT(position_id) DO UPDATE SET
                 mark_price         = excluded.mark_price,
@@ -480,9 +489,13 @@ class SQLiteStore:
                 realised_pnl       = excluded.realised_pnl,
                 exit_reason        = excluded.exit_reason,
                 status             = excluded.status,
+                stop_loss_price    = excluded.stop_loss_price,
+                take_profit_price  = excluded.take_profit_price,
                 closed_at_ms       = excluded.closed_at_ms,
                 last_funding_at_ms = excluded.last_funding_at_ms,
-                desk               = excluded.desk
+                desk               = excluded.desk,
+                defense_stress_streak_s = excluded.defense_stress_streak_s,
+                defense_tier1_applied   = excluded.defense_tier1_applied
             """, payload)
             conn.commit()
 

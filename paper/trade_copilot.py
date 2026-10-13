@@ -12,7 +12,7 @@ Guardrails:
 3. Zero-Latency Pull Architecture: Stateless evaluation reading in-memory state.
 """
 from dataclasses import dataclass, asdict, field
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from core.clock import now_utc_ms
 
 
@@ -28,10 +28,33 @@ class CryptoCopilotState:
     current_unrealised_usd: float
     floating_bps: float
     reasoning: str
+    flow_align: float = 0.0
     telemetry_crumbs: List[Dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+def get_strategy_streak_thresholds(strategy_id: str, max_hold_ms: Optional[int] = None) -> Tuple[int, int, float]:
+    """Returns (tier1_tighten_streak_s, tier2_scratch_streak_s, max_scratch_bps) calibrated by horizon.
+    
+    Auditor Amendment 1 Matrix:
+    - Micro-Scalper (S2): 60s tighten, 90s scratch, -18.0 bps max scratch
+    - Funding Carry (S1): 300s tighten, 480s scratch, -40.0 bps max scratch
+    - Macro Regime (SH1): 180s tighten, 360s scratch, -35.0 bps max scratch
+    - Swing Momentum (SH4, S4 / Default): 120s tighten, 240s scratch, -30.0 bps max scratch
+    """
+    strat = (strategy_id or "").upper()
+    hold = max_hold_ms or 7_200_000
+
+    if "ORDERBOOK" in strat or hold <= 300_000:
+        return 60, 90, -18.0
+    elif "FUNDING" in strat or hold >= 28_800_000:
+        return 300, 480, -40.0
+    elif "MACRO" in strat or hold >= 14_400_000:
+        return 180, 360, -35.0
+    else:
+        return 120, 240, -30.0
 
 
 def evaluate_crypto_copilot(
@@ -224,5 +247,6 @@ def evaluate_crypto_copilot(
         current_unrealised_usd=unrealised_pnl,
         floating_bps=floating_bps,
         reasoning=reason,
+        flow_align=round(flow_align, 4),
         telemetry_crumbs=crumbs,
     )

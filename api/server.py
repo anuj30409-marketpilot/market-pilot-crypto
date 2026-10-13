@@ -297,3 +297,32 @@ def trigger_ml_retraining():
     result = retraining_engine.run_retraining_cycle()
     return {"status": "SUCCESS", "result": result}
 
+
+# ── Copilot Governance & Policy Endpoints ──────────────────────────────────
+
+class CopilotModeRequest(BaseModel):
+    mode: str  # "ADVISORY" or "ACTIVE_DEFENSE"
+
+
+@app.get("/paper/copilot/mode")
+def get_copilot_mode():
+    """Returns the current Crypto Copilot execution mode (ADVISORY or ACTIVE_DEFENSE)."""
+    from config.settings import settings
+    return {
+        "mode": getattr(settings, "COPILOT_EXECUTION_MODE", "ADVISORY"),
+        "description": "ADVISORY: Real-time situational telemetry only | ACTIVE_DEFENSE: Automated soft SL tighten and defensive scratch exits",
+    }
+
+
+@app.post("/paper/copilot/mode")
+def set_copilot_mode(req: CopilotModeRequest):
+    """Sets the Crypto Copilot execution mode."""
+    from config.settings import settings
+    target_mode = req.mode.upper().strip()
+    if target_mode not in ("ADVISORY", "ACTIVE_DEFENSE"):
+        raise HTTPException(status_code=400, detail="Invalid mode. Must be 'ADVISORY' or 'ACTIVE_DEFENSE'.")
+    settings.COPILOT_EXECUTION_MODE = target_mode
+    logger.info("Updated COPILOT_EXECUTION_MODE to %s", target_mode)
+    return {"status": "UPDATED", "mode": target_mode}
+
+

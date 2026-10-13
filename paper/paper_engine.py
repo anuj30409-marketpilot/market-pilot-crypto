@@ -107,6 +107,10 @@ class PaperPosition:
     stop_loss_distance_usd: float = 0.0
     desk: str = "QUANT"  # "QUANT" or "SUPERHUMAN"
 
+    # Copilot Phase 2 Defensive Execution State
+    defense_stress_streak_s: int = 0
+    defense_tier1_applied: bool = False
+
     def update_mark(self, mark: float):
         self.mark_price = mark
         if self.direction == "LONG":
@@ -158,6 +162,8 @@ class PaperPosition:
             "risk_loss_usd": self.risk_loss_usd,
             "stop_loss_distance_usd": self.stop_loss_distance_usd,
             "desk": self.desk,
+            "defense_stress_streak_s": self.defense_stress_streak_s,
+            "defense_tier1_applied": self.defense_tier1_applied,
         }
 
 
@@ -212,6 +218,8 @@ class PaperEngine:
                         risk_loss_usd=float(r.get("risk_loss_usd") or 0.0),
                         stop_loss_distance_usd=float(r.get("stop_loss_distance_usd") or 0.0),
                         desk=r.get("desk", "QUANT").upper(),
+                        defense_stress_streak_s=int(r.get("defense_stress_streak_s") or 0),
+                        defense_tier1_applied=bool(r.get("defense_tier1_applied") or False),
                     )
                     self._positions[pos.position_id] = pos
             logger.info("Hydrated %d positions from SQLite into memory.", len(self._positions))
@@ -599,6 +607,63 @@ class PaperEngine:
                     hit, reason, gap = True, "STRUCTURAL_THESIS_INVALIDATION", False
                 elif pos.direction == "SHORT" and state.regime == "TRENDING_UP" and state.cvd_notional_usd_zscore >= 1.8:
                     hit, reason, gap = True, "STRUCTURAL_THESIS_INVALIDATION", False
+
+        # ── COPILOT PHASE 2: ACTIVE DEFENSIVE HOOK ──────────────────────────────
+        # Single-Master Execution Hook (Auditor Approved with 3 Amendments)
+        from config.settings import settings
+        copilot_mode = getattr(settings, "COPILOT_EXECUTION_MODE", "ADVISORY").upper()
+
+        if not hit and copilot_mode == "ACTIVE_DEFENSE" and tracker:
+            try:
+                from collectors.binance_ws import collector
+                ob = collector.orderbooks.get(pos.symbol) if hasattr(collector, "orderbooks") else None
+            except Exception:
+                ob = None
+
+            from paper.trade_copilot import evaluate_crypto_copilot, get_strategy_streak_thresholds
+            copilot_state = evaluate_crypto_copilot(pos.to_dict(), tracker, ob)
+
+            flow_align = copilot_state.flow_align
+            floating_bps = copilot_state.floating_bps
+            is_stressed = (copilot_state.health_score < 30) and (flow_align <= -1.2) and (floating_bps < -10.0)
+
+            # Update streak (in seconds)
+            if is_stressed:
+                pos.defense_stress_streak_s = getattr(pos, "defense_stress_streak_s", 0) + 1
+            elif copilot_state.health_score >= 40 or flow_align > -0.5:
+                pos.defense_stress_streak_s = 0
+
+            # Horizon-stratified thresholds (Auditor Amendment 1)
+            t1_streak_s, t2_streak_s, max_scratch_bps = get_strategy_streak_thresholds(pos.strategy_id, pos.max_hold_ms)
+
+            # Tier 1: Soft Defense SL Tighten (Executed once)
+            # Clamped with mandatory 20 bps buffer from current mark price (Auditor Amendment 2)
+            if pos.defense_stress_streak_s >= t1_streak_s and not getattr(pos, "defense_tier1_applied", False):
+                cushion_pct = (abs(floating_bps) + 20.0) / 10000.0
+                if pos.direction == "LONG":
+                    new_sl = max(mark * (1.0 - 0.0020), pos.entry_price * (1.0 - cushion_pct))
+                    if not pos.stop_loss_price or new_sl > pos.stop_loss_price:
+                        pos.stop_loss_price = new_sl
+                        pos.defense_tier1_applied = True
+                        sqlite_store.upsert_paper_position(pos.to_dict())
+                        logger.info(f"[COPILOT DEFENSE TIER-1] {pos.symbol} LONG SL tightened to {pos.stop_loss_price:.2f}")
+                else:
+                    new_sl = min(mark * (1.0 + 0.0020), pos.entry_price * (1.0 + cushion_pct))
+                    if not pos.stop_loss_price or new_sl < pos.stop_loss_price:
+                        pos.stop_loss_price = new_sl
+                        pos.defense_tier1_applied = True
+                        sqlite_store.upsert_paper_position(pos.to_dict())
+                        logger.info(f"[COPILOT DEFENSE TIER-1] {pos.symbol} SHORT SL tightened to {pos.stop_loss_price:.2f}")
+
+            # Tier 2: Defensive Scratch Exit (Auditor Amendment 3: Immediate Taker Exit with gap=False)
+            if pos.defense_stress_streak_s >= t2_streak_s:
+                if max_scratch_bps <= floating_bps <= -10.0:
+                    hit, reason, gap = True, "COPILOT_DEFENSIVE_SCRATCH", False
+                    logger.warning(
+                        f"[COPILOT DEFENSIVE SCRATCH] {pos.symbol} {pos.direction} "
+                        f"streak={pos.defense_stress_streak_s}s, health={copilot_state.health_score}, "
+                        f"flow={flow_align:.2f}σ, pnl={floating_bps:.1f}bps"
+                    )
 
         # Time-stop check based on strategy lifecycle (e.g. 20m, 60m, 2h, 8h)
         if not hit and pos.max_hold_ms and elapsed_ms >= pos.max_hold_ms:

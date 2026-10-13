@@ -268,6 +268,47 @@
   - `test_phase5_control.py`: 3/3 PASSED (100%).
   - `test_os_foundation.py`: 6/6 PASSED (100%).
   - Vite Frontend Build: PASSED (0 errors, 4.93s).
+- **Deployment Status:** DEPLOYED TO PRODUCTION (Oracle VM 1 + VM 2) upon explicit user command "deploy now" at 2026-10-13 14:50:00 UTC. Systemd service active (PID 128240), 2 active in-flight trades streaming live Copilot telemetry.
+
+### 2026-10-13 (Part 3): Copilot Phase 2 — Microstructure Defensive Execution Policy Hook (Approved by User)
+- **Problem & Context:**
+  1. 24-hour live soak telemetry revealed +$112.64 net profit, but 6 trades exited on `STRUCTURAL_THESIS_INVALIDATION` (STI) accumulating -$52.78 total loss (-22.5 bps avg).
+  2. Macro regime classifier has a 10–15 minute confirmation lag. Microstructure distress (CVD flow $z \le -1.2\sigma$, orderbook queue $I_5 < -0.25$, Health < 30%) was present minutes before the full macro regime flipped.
+- **Independent Quant Audit (`independent_quant_auditor`):**
+  1. *Approved with 3 Mandatory Quantitative Amendments:*
+     - *Amendment 1 (Horizon-Stratified Streak Matrix):*
+       * Scalp (S2, 5m): T1 Tighten = 60s, T2 Scratch = 90s, Max Scratch = -18.0 bps.
+       * Swing (SH4/S4, 3h): T1 Tighten = 120s, T2 Scratch = 240s, Max Scratch = -30.0 bps.
+       * Macro (SH1, 4h): T1 Tighten = 180s, T2 Scratch = 360s, Max Scratch = -35.0 bps.
+       * Carry (S1, 8h): T1 Tighten = 300s, T2 Scratch = 480s, Max Scratch = -40.0 bps.
+     - *Amendment 2 (Tier-1 Noise Floor Clamp):* Tightened SL must be clamped with mandatory 20 bps buffer from current mark price to avoid spread whipsaws and 1.5x gap penalties.
+     - *Amendment 3 (Immediate Taker Execution on Distressed Scratches):* Tier-2 scratch exits must execute as immediate Taker market orders (`gap=False`) rather than passive Maker limits to prevent adverse selection and runaway slippage.
+- **Changes Applied:**
+  1. `paper/trade_copilot.py`:
+     - Added `flow_align` property to `CryptoCopilotState`.
+     - Implemented `get_strategy_streak_thresholds(strategy_id, max_hold_ms)` with calibrated horizon matrix.
+  2. `config/settings.py`:
+     - Added `COPILOT_EXECUTION_MODE = os.getenv("COPILOT_EXECUTION_MODE", "ADVISORY")`.
+  3. `storage/sqlite_store.py`:
+     - Added `defense_stress_streak_s` and `defense_tier1_applied` columns and migrations.
+  4. `paper/paper_engine.py`:
+     - Added defense fields to `PaperPosition` dataclass, `to_dict()`, and `hydrate_from_db()`.
+     - Integrated single-master defensive execution hook inside `_check_sl_tp()`.
+  5. `api/server.py`:
+     - Exposed `GET /paper/copilot/mode` and `POST /paper/copilot/mode`.
+  6. Frontend (`frontend-v3` in `market-pilot`):
+     - `crypto-paper-api.ts`: Added `getCopilotMode`, `setCopilotMode`, and defense fields.
+     - `CryptoPaperDesk.tsx`: Added interactive Copilot Policy toggle (`👁️ Advisory` / `🛡️ Active Defense`), Tier-1 tightened tag in OpenRow, and Copilot Scratch badge in ClosedRow.
+     - `CryptoPaperDesk.css`: Added styles for active defense button, scratch badge, and tightened tag.
+- **Verification Suites:**
+  - `scripts/test_crypto_copilot.py`: 6/6 PASSED (100%). Latency benchmark: **0.0115 ms per evaluation** (87,303 evals/sec).
+  - `test_quant_invariants.py`: 5/5 PASSED (100%).
+  - `test_phase4_dispatcher.py`: 4/4 PASSED (100%).
+  - `test_phase5_control.py`: 3/3 PASSED (100%).
+  - `test_os_foundation.py`: 6/6 PASSED (100%).
+  - Frontend Vitest: 6/6 PASSED (100%).
+  - Oxlint: 0 warnings, 0 errors.
+  - Vite Frontend Build: PASSED (0 errors, 1.26s).
 - **Deployment Status:** NOT DEPLOYED. Local verification clean. Awaiting user deployment instruction per INV-OPS-001.
 
 

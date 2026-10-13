@@ -36,4 +36,7 @@ class Settings(BaseModel):
     DB_FILE: Path = DB_PATH
     PARQUET_BASE: Path = PARQUET_DIR
 
+    # Copilot Execution Policy (Phase 1: ADVISORY, Phase 2: ACTIVE_DEFENSE)
+    COPILOT_EXECUTION_MODE: str = os.getenv("COPILOT_EXECUTION_MODE", "ADVISORY")
+
 settings = Settings()
