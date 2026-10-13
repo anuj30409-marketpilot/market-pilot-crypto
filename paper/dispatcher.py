@@ -159,7 +159,27 @@ class PortfolioRiskController:
             logger.critical("PORTFOLIO CIRCUIT BREAKER TRIGGERED: %s", self.circuit_breaker_reason)
             return False, f"RISK_REJECT_CIRCUIT_BREAKER_DAILY_DD ({self.circuit_breaker_reason})"
 
-        # 6. Differentiated Post-Exit Symbol Cooldown Check
+        # 6. Consecutive Loss Circuit Breaker Check (Amendment 4)
+        sorted_closed = sorted(
+            [p for p in closed_positions if p.get("closed_at_ms")],
+            key=lambda x: x.get("closed_at_ms", 0),
+            reverse=True,
+        )
+        streak_losses = 0
+        for p in sorted_closed:
+            if (p.get("realised_pnl") or 0.0) < 0.0:
+                streak_losses += 1
+            else:
+                break
+
+        if streak_losses >= CONSECUTIVE_LOSS_LIMIT:
+            last_loss_time = sorted_closed[0].get("closed_at_ms", 0)
+            cooldown_end = last_loss_time + COOLDOWN_AFTER_LOSSES_MS
+            if now_ms < cooldown_end:
+                remaining_m = (cooldown_end - now_ms) / 60000.0
+                return False, f"RISK_REJECT_CONSECUTIVE_LOSS_COOLDOWN ({streak_losses} consecutive losses; {remaining_m:.1f}m cooldown remaining)"
+
+        # 7. Differentiated Post-Exit Symbol Cooldown Check
         recent_sym_closed = [p for p in closed_positions if p.get("symbol") == symbol.upper() and p.get("closed_at_ms")]
         if recent_sym_closed:
             latest = max(recent_sym_closed, key=lambda x: x.get("closed_at_ms", 0))
@@ -222,51 +242,30 @@ class PaperDispatcher:
         # Notional = risk_budget / total_adverse_move_pct
         notional_usdt = risk_budget_usd / max(0.001, total_adverse_move_pct)
 
-        # Guardrails: Min $50, Max 25% of account equity or MAX_POSITION_NOTIONAL_USDT
-        max_allowed_notional = min(MAX_POSITION_NOTIONAL_USDT, equity_usd * 0.25)
+        # Guardrails: Min $50, Max 40% of account equity or MAX_POSITION_NOTIONAL_USDT
+        max_allowed_notional = min(MAX_POSITION_NOTIONAL_USDT, equity_usd * 0.40)
         notional_usdt = max(50.0, min(notional_usdt, max_allowed_notional))
         return notional_usdt, sl_pct, tp_pct, max_hold_ms
 
     def infer_direction(self, candidate: CandidateRecord) -> str:
-        """Infers trade direction (LONG or SHORT) from candidate metadata and hypothesis."""
-        strat = candidate.strategy_id
+        """Infers trade direction (LONG or SHORT) canonically from candidate metadata and hypothesis."""
         reason = candidate.decision_reason.upper()
-        
-        # S1: If basis is positive / funding is high positive -> SHORT. If funding negative -> LONG.
+        reason_padded = f" {reason} "
+
+        # Priority 1: Check explicit canonical direction tokens
+        if " SHORT " in reason_padded or reason.startswith("SHORT") or "SHORT:" in reason or "SHORT " in reason:
+            return "SHORT"
+        if " LONG " in reason_padded or reason.startswith("LONG") or "LONG:" in reason or "LONG " in reason:
+            return "LONG"
+
+        # Priority 2: Strategy-specific semantic fallbacks
+        strat = candidate.strategy_id
         if "FUNDING" in strat:
-            if "NEGATIVE" in reason or "DISCOUNT" in reason:
-                return "LONG"
-            return "SHORT"
-
-        # S2: CVD & Imbalance
+            return "LONG" if ("NEGATIVE" in reason or "DISCOUNT" in reason) else "SHORT"
         if "ORDERBOOK" in strat or "CVD" in strat:
-            if "BEARISH" in reason or "NEGATIVE" in reason:
-                return "SHORT"
-            return "LONG"
-
-        # S3: Liquidation Exhaustion
+            return "SHORT" if ("BEARISH" in reason or "NEGATIVE" in reason) else "LONG"
         if "LIQUIDATION" in strat:
-            if "LONG" in reason or "CASCADE_DOWN" in reason or "DUMP" in reason:
-                return "LONG"  # Fading a dump
-            return "SHORT"
-
-        # S4/SH4: Swing Momentum — direction is explicit in the decision reason
-        if "SWING" in strat:
-            if "SHORT" in reason:
-                return "SHORT"
-            return "LONG"
-
-        # SH1: Superhuman Macro Regime
-        if "MACRO" in strat or "SH1" in strat:
-            if "SHORT" in reason or "BEARISH" in reason:
-                return "SHORT"
-            return "LONG"
-
-        # SH3: Superhuman Volatility Expansion
-        if "VOLATILITY" in strat or "SH3" in strat:
-            if "SHORT" in reason or "BEARISH" in reason:
-                return "SHORT"
-            return "LONG"
+            return "LONG" if ("CASCADE_DOWN" in reason or "DUMP" in reason) else "SHORT"
 
         return "LONG"
 

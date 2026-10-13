@@ -201,66 +201,89 @@ def test_copilot_phase2_defensive_policy_hook():
     from paper.paper_engine import paper_engine, PaperPosition
     from config.settings import settings
     from collectors.derivatives import derivatives_engine
+    from storage.sqlite_store import sqlite_store
 
-    # Mock hostile derivatives tracker on BTCUSDT
-    derivatives_engine.trackers["BTCUSDT"] = MockDerivativesTracker(
-        cvd_z=-2.2, funding_rate=0.0001, regime="RANGE"
-    )
+    # Sandbox SQLite DB to prevent test positions polluting production database
+    test_db = Path("data/test_copilot_temp.db")
+    if test_db.exists():
+        try:
+            test_db.unlink()
+        except Exception:
+            pass
+    orig_db = sqlite_store.db_path
+    sqlite_store.db_path = test_db
+    sqlite_store._init_db()
+    sqlite_store.init_paper_tables()
+    paper_engine._positions.clear()
 
-    from core.clock import now_utc_ms
-    now_ms = now_utc_ms()
-    pos = PaperPosition(
-        position_id="test-copilot-phase2-pos",
-        symbol="BTCUSDT",
-        direction="LONG",
-        notional_usdt=2000.0,
-        leverage=5,
-        entry_price=80000.0,
-        entry_slippage_bps=1.0,
-        entry_fee_usdt=0.80,
-        margin_usdt=400.0,
-        mark_price=79880.0,  # -15 bps floating
-        opened_at_ms=now_ms - 60_000,
-        max_hold_ms=10_800_000,
-        strategy_id="STRAT_SWING_MOMENTUM_V1",
-        stop_loss_price=79520.0,  # -60 bps initial SL
-        take_profit_price=81280.0,
-    )
-    pos.update_mark(79880.0)
+    try:
+        # Mock hostile derivatives tracker on BTCUSDT
+        derivatives_engine.trackers["BTCUSDT"] = MockDerivativesTracker(
+            cvd_z=-2.2, funding_rate=0.0001, regime="RANGE"
+        )
 
-    # 1. Advisory Mode: Stress condition does NOT mutate SL or exit
-    settings.COPILOT_EXECUTION_MODE = "ADVISORY"
-    pos.defense_stress_streak_s = 300
-    paper_engine._check_sl_tp(pos)
-    assert pos.status == "OPEN", "In ADVISORY mode, position must remain OPEN!"
+        from core.clock import now_utc_ms
+        now_ms = now_utc_ms()
+        pos = PaperPosition(
+            position_id="test-copilot-phase2-pos",
+            symbol="BTCUSDT",
+            direction="LONG",
+            notional_usdt=2000.0,
+            leverage=5,
+            entry_price=80000.0,
+            entry_slippage_bps=1.0,
+            entry_fee_usdt=0.80,
+            margin_usdt=400.0,
+            mark_price=79880.0,  # -15 bps floating
+            opened_at_ms=now_ms - 60_000,
+            max_hold_ms=10_800_000,
+            strategy_id="STRAT_SWING_MOMENTUM_V1",
+            stop_loss_price=79520.0,  # -60 bps initial SL
+            take_profit_price=81280.0,
+        )
+        pos.update_mark(79880.0)
 
-    # 2. Active Defense Mode: Tier 1 Soft Tighten (at streak >= 120s)
-    settings.COPILOT_EXECUTION_MODE = "ACTIVE_DEFENSE"
-    pos.defense_stress_streak_s = 120
-    pos.defense_tier1_applied = False
-    paper_engine._check_sl_tp(pos)
+        # 1. Advisory Mode: Stress condition does NOT mutate SL or exit
+        settings.COPILOT_EXECUTION_MODE = "ADVISORY"
+        pos.defense_stress_streak_s = 300
+        paper_engine._check_sl_tp(pos)
+        assert pos.status == "OPEN", "In ADVISORY mode, position must remain OPEN!"
 
-    assert pos.status == "OPEN", "At Tier-1 streak, position should remain OPEN!"
-    assert pos.defense_tier1_applied is True, "defense_tier1_applied must be set to True!"
-    # Verify Amendment 2: Must be clamped with >= 20 bps buffer from current mark price (79880.0)
-    max_allowed_sl = 79880.0 * (1.0 - 0.0020)  # At least 20 bps below mark
-    assert pos.stop_loss_price <= max_allowed_sl, (
-        f"SL {pos.stop_loss_price} must be at least 20 bps below mark {79880.0} (<= {max_allowed_sl})!"
-    )
-    assert pos.stop_loss_price > 79520.0, "SL must be tightened above initial 79520.0!"
+        # 2. Active Defense Mode: Tier 1 Soft Tighten (at streak >= 120s)
+        settings.COPILOT_EXECUTION_MODE = "ACTIVE_DEFENSE"
+        pos.defense_stress_streak_s = 120
+        pos.defense_tier1_applied = False
+        paper_engine._check_sl_tp(pos)
 
-    # 3. Active Defense Mode: Tier 2 Defensive Scratch (at streak >= 240s)
-    pos.defense_stress_streak_s = 245
-    paper_engine._check_sl_tp(pos)
+        assert pos.status == "OPEN", "At Tier-1 streak, position should remain OPEN!"
+        assert pos.defense_tier1_applied is True, "defense_tier1_applied must be set to True!"
+        # Verify Amendment 2: Must be clamped with >= 20 bps buffer from current mark price (79880.0)
+        max_allowed_sl = 79880.0 * (1.0 - 0.0020)  # At least 20 bps below mark
+        assert pos.stop_loss_price <= max_allowed_sl, (
+            f"SL {pos.stop_loss_price} must be at least 20 bps below mark {79880.0} (<= {max_allowed_sl})!"
+        )
+        assert pos.stop_loss_price > 79520.0, "SL must be tightened above initial 79520.0!"
 
-    assert pos.status == "CLOSED", "At Tier-2 streak (245s >= 240s), position must be CLOSED!"
-    assert pos.exit_reason == "COPILOT_DEFENSIVE_SCRATCH", (
-        f"Expected COPILOT_DEFENSIVE_SCRATCH, got {pos.exit_reason}"
-    )
+        # 3. Active Defense Mode: Tier 2 Defensive Scratch (at streak >= 240s)
+        pos.defense_stress_streak_s = 245
+        paper_engine._check_sl_tp(pos)
 
-    # Reset setting
-    settings.COPILOT_EXECUTION_MODE = "ADVISORY"
-    print("  [OK] Test 6: Copilot Phase 2 Clamped SL Tighten & Defensive Scratch (Amendments 2 & 3) verified.")
+        assert pos.status == "CLOSED", "At Tier-2 streak (245s >= 240s), position must be CLOSED!"
+        assert pos.exit_reason == "COPILOT_DEFENSIVE_SCRATCH", (
+            f"Expected COPILOT_DEFENSIVE_SCRATCH, got {pos.exit_reason}"
+        )
+
+        # Reset setting
+        settings.COPILOT_EXECUTION_MODE = "ADVISORY"
+        print("  [OK] Test 6: Copilot Phase 2 Clamped SL Tighten & Defensive Scratch (Amendments 2 & 3) verified.")
+    finally:
+        sqlite_store.db_path = orig_db
+        paper_engine._positions.clear()
+        if test_db.exists():
+            try:
+                test_db.unlink()
+            except Exception:
+                pass
 
 
 def run_all_copilot_tests():

@@ -81,7 +81,46 @@ async def run_phase4_tests():
             open_positions=[], closed_positions=fake_closed_losses, account_equity=equity, now_ms=now_ms
         )
         assert not allowed and "CIRCUIT_BREAKER_DAILY_DD" in reason, f"Circuit breaker should trip: {reason}"
-        print("      [OK] Concurrency limits and Daily Drawdown Circuit Breaker verified.")
+
+        # 2c. Consecutive Loss Circuit Breaker (3 consecutive losses -> 4h cooldown)
+        risk_ctrl_streak = PortfolioRiskController()
+        fake_streak_losses = [
+            {"realised_pnl": -10.0, "closed_at_ms": now_ms - 1000},
+            {"realised_pnl": -15.0, "closed_at_ms": now_ms - 2000},
+            {"realised_pnl": -20.0, "closed_at_ms": now_ms - 3000},
+        ]
+        allowed, reason = risk_ctrl_streak.check_portfolio_limits(
+            symbol="ETHUSDT", direction="LONG", candidate_notional=500.0,
+            open_positions=[], closed_positions=fake_streak_losses, account_equity=equity, now_ms=now_ms
+        )
+        assert not allowed and "CONSECUTIVE_LOSS_COOLDOWN" in reason, f"Consecutive loss breaker should trip: {reason}"
+
+        # 2d. Canonical Direction Parsing Verification (Amendment 1)
+        mock_cand_s1_long = CandidateRecord(
+            candidate_id="C-S1-L", timestamp_ms=now_ms, symbol="BTCUSDT", origin="QUANT",
+            strategy_id="STRAT_FUNDING_REVERSION_V1", decision="ACCEPT",
+            decision_reason="Valid LONG carry signal: Funding z-score=-2.05, Basis=-4.0 bps, Net edge=10.3 bps",
+            engine_version="v2", model_version="v2", signal_version="v2", strategy_version="v1",
+            feature_version="v1", parameter_version="v1", signal_score=1.0, expected_edge_bps=20,
+            estimated_cost_bps=10, expected_net_edge_bps=10, regime="RANGE", rejection_codes=[],
+            conversion_rate_applied=1.0, research_venue="BINANCE", execution_venue="DELTA_INDIA",
+            hypothetical_entry=83000.0, created_at_iso=""
+        )
+        assert paper_dispatcher.infer_direction(mock_cand_s1_long) == "LONG", "S1 carry LONG must infer LONG!"
+
+        mock_cand_s2_short = CandidateRecord(
+            candidate_id="C-S2-S", timestamp_ms=now_ms, symbol="ETHUSDT", origin="QUANT",
+            strategy_id="STRAT_ORDERBOOK_MOMENTUM_V1", decision="ACCEPT",
+            decision_reason="Valid SHORT momentum flow: Imbalance_5=-0.40, CVD Z-score=-1.50, Net edge=8.5 bps",
+            engine_version="v2", model_version="v2", signal_version="v2", strategy_version="v1",
+            feature_version="v1", parameter_version="v1", signal_score=1.0, expected_edge_bps=20,
+            estimated_cost_bps=10, expected_net_edge_bps=10, regime="RANGE", rejection_codes=[],
+            conversion_rate_applied=1.0, research_venue="BINANCE", execution_venue="DELTA_INDIA",
+            hypothetical_entry=2500.0, created_at_iso=""
+        )
+        assert paper_dispatcher.infer_direction(mock_cand_s2_short) == "SHORT", "S2 flow SHORT must infer SHORT!"
+
+        print("      [OK] Concurrency limits, Daily DD, Consecutive Loss Breaker, and Canonical Direction Parsing verified.")
 
         # 3. Test End-to-End Candidate Dispatch -> Orderbook Execution -> Provenance Sync
         print("[3/4] Testing Candidate Dispatch & Candidate Ledger Sync...")

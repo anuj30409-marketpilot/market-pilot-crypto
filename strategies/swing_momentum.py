@@ -189,15 +189,15 @@ def evaluate_swing_momentum(
         trend_bear = (ema_fast is not None and ema_slow is not None and ema_fast < ema_slow and regime == "TRENDING_DOWN")
         adx_ok = (adx_val is not None and adx_val >= 22.0)
 
-        # 5. Pullback + Absorption Setup
-        # Long Setup: Uptrend + TRENDING_UP -> Price tested Fast EMA support -> Reclaiming above EMA
+        # 5. Pullback + Absorption Setup (Clamped within 40 bps of Fast EMA to prevent buying blow-off tops / shorting climax lows)
+        MAX_PULLBACK_EXTENSION_PCT = 0.0040  # 40 bps max extension from 15m fast EMA
         pullback_tested_long = (ema_fast is not None and min(recent_15m_lows) <= ema_fast * 1.003)
-        reclaiming_long = (ema_fast is not None and current_close >= ema_fast * 0.9995)
+        reclaiming_long = (ema_fast is not None and ema_fast * 0.9995 <= current_close <= ema_fast * (1.0 + MAX_PULLBACK_EXTENSION_PCT))
         long_setup = trend_bull and pullback_tested_long and reclaiming_long
 
         # Short Setup: Downtrend + TRENDING_DOWN -> Price rallied to Fast EMA resistance -> Rejecting below EMA
         pullback_tested_short = (ema_fast is not None and max(recent_15m_highs) >= ema_fast * 0.997)
-        rejecting_short = (ema_fast is not None and current_close <= ema_fast * 1.0005)
+        rejecting_short = (ema_fast is not None and ema_fast * (1.0 - MAX_PULLBACK_EXTENSION_PCT) <= current_close <= ema_fast * 1.0005)
         short_setup = trend_bear and pullback_tested_short and rejecting_short
 
         # CVD flow & Orderbook confirmation (>= 0.25σ absorption)

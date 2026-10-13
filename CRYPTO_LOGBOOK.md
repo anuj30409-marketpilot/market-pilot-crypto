@@ -309,7 +309,44 @@
   - Frontend Vitest: 6/6 PASSED (100%).
   - Oxlint: 0 warnings, 0 errors.
   - Vite Frontend Build: PASSED (0 errors, 1.26s).
-- **Deployment Status:** NOT DEPLOYED. Local verification clean. Awaiting user deployment instruction per INV-OPS-001.
+- **Deployment Status:** DEPLOYED TO PRODUCTION (Oracle VM 1 + VM 2) at 10:08:59 UTC (commit 1833606).
+
+### 2026-10-13 (Part 4): Forensic Loss Audit, Direction Inversion Fix & Consecutive Loss Circuit Breaker (Approved by User)
+- **Problem & Context:**
+  1. Production desk experienced a streak of consecutive negative trades between 06:34 UTC and 14:11 UTC totaling -$55.97, interrupting a dominant +$129.74 winning run.
+  2. Telemetry and forensic audit revealed:
+     - S1 (`FUNDING_REVERSION`) candidate `CAND-FUND-BTCUSDT-1791892813436` emitted "Valid LONG carry signal: Funding z-score=-2.05...", but `paper/dispatcher.py` checked for literal words `"NEGATIVE"`/`"DISCOUNT"`, defaulting to `"SHORT"`. Inverted trade shorted bottom at $83,298 and lost -$12.52 instead of winning +$15.26 as LONG (a -$27.78 swing).
+     - Deploy pipeline on VM 2 ran `scripts/test_crypto_copilot.py` directly against production SQLite DB without sandboxing, recording a synthetic -$4.60 test position (`test-copilot-phase2-pos`).
+     - Market experienced violent intraday V-whipsaw (84.1k peak -> 83.0k dump -> 83.8k squeeze), catching unconstrained 15m pullback breakouts.
+     - Consecutive loss breaker (`CONSECUTIVE_LOSS_LIMIT = 3`) was dead code in `dispatcher.py`.
+- **Independent Quant Audit (`independent_quant_auditor`):**
+  1. Approved remediation plan with **5 Mandatory Amendments**:
+     - *Amendment 1 (Universal Canonical Direction Parsing):* Priority parsing for explicit `" SHORT "` / `" LONG "` tokens across all strategies.
+     - *Amendment 2 (Symmetric Overextension Clamps on S4 & SH4):* Clamped 15m pullback entry to $\pm 40\text{ bps}$ of Fast EMA (`MAX_PULLBACK_EXTENSION_PCT = 0.0040`) to prevent buying tops / shorting bottoms.
+     - *Amendment 3 (Database Sandboxing in Test Runner):* Isolated `sqlite_store.db_path` to `/tmp/test_copilot_temp.db` in `test_crypto_copilot.py` with strict `try...finally`.
+     - *Amendment 4 (Enforce Consecutive Loss Breaker):* Wired `CONSECUTIVE_LOSS_LIMIT = 3` and 4-hour cooldown into `PortfolioRiskController.check_portfolio_limits()`.
+     - *Amendment 5 (Reconcile Notional Cap Multiplier):* Reconciled `calculate_position_size()` to 40% equity ($4,000 cap).
+- **Changes Applied:**
+  1. `paper/dispatcher.py`:
+     - Implemented universal canonical direction parsing protocol in `infer_direction()`.
+     - Reconciled max position notional cap to 40% equity (`equity_usd * 0.40`).
+     - Wired 3-consecutive-loss circuit breaker into `check_portfolio_limits()`.
+  2. `strategies/swing_momentum.py` & `strategies/superhuman_evaluator.py`:
+     - Applied 40 bps max extension clamp on 15m Fast EMA for S4 and SH4.
+  3. `scripts/test_crypto_copilot.py`:
+     - Sandboxed SQLite store to temporary DB during test 6.
+  4. `scripts/test_phase4_dispatcher.py`:
+     - Added unit tests for consecutive loss circuit breaker and canonical direction parsing.
+  5. Oracle VM 2 Database:
+     - Purged synthetic `test-copilot-phase2-pos` from production SQLite DB.
+- **Verification Suites:**
+  - `test_quant_invariants.py`: 5/5 PASSED (100%).
+  - `test_phase4_dispatcher.py`: 4/4 PASSED (100%).
+  - `test_crypto_copilot.py`: 6/6 PASSED (100%).
+  - `test_phase5_control.py`: 3/3 PASSED (100%).
+  - `test_os_foundation.py`: 6/6 PASSED (100%).
+- **Deployment Status:** LOCAL CODE VERIFIED (100% tests passed). DB cleaned on VM 2. Awaiting user deploy command per INV-OPS-001.
+
 
 
 
