@@ -347,6 +347,36 @@
   - `test_os_foundation.py`: 6/6 PASSED (100%).
 - **Deployment Status:** LOCAL CODE VERIFIED (100% tests passed). DB cleaned on VM 2. Awaiting user deploy command per INV-OPS-001.
 
+### 2026-10-14: Swing Hold Expansion (5h) & Tier-1 Ratchet Breathing Calibration for ₹5,000 INR Targets (Approved by User)
+- **Problem & Context:**
+  1. User inquired why recent winning trades were only generating ₹215 to ₹1,220 INR instead of the intended ₹5,000 INR (~$59 USDT) target on the $10,000 USDT desk.
+  2. Live VM 2 database forensics revealed:
+     - Trade `cd3bfed6` (`STRAT_SWING_MOMENTUM_V1` on $3,818 notional) was trending cleanly up +0.45%, but was prematurely truncated by `TIME_STOP` at 180m (3 hours), banking +$14.19 (~₹1,220 INR) instead of reaching the full +1.60% TP target (+~$59 net / ₹5,056 INR).
+     - Trade `QUANT ETH Carry` reached +60 bps, triggering Tier 1 (+22 bps lock), which was snapped by minor noise, banking +$2.50 (~₹215 INR).
+     - Scalper S2 is constrained to 0.25% TP (~₹724 INR) by design.
+- **Independent Quant Audit (`independent_quant_auditor`):**
+  1. *Unconditionally Approved (100% Compliance):*
+     - Brownian Reflection Principle: Extending swing hold from 3h to 5h almost doubles the probability of reaching the 160 bps target for BTC (from 11.61% to 22.35%) and increases ETH to 37.24%.
+     - Invariant 1 (Net Profit): 35 bps lock - 15 bps max friction = +20 bps net >= 5 bps min required.
+     - Invariant 2 (Noise Buffer): 80 bps - 35 bps = 45 bps >= 2 * 15 bps (30 bps min noise floor).
+     - Invariant 4 (Stagnation): Evaluates at 75% of 300m = 225m (3.75h) >= 65%.
+     - Invariant 5 (Sizing): Risk budget strictly preserved at 0.50% ($50).
+- **Changes Applied:**
+  1. `paper/dispatcher.py`:
+     - Extended `max_hold_ms` for `STRAT_SWING_MOMENTUM_V1` and `STRAT_SUPERHUMAN_SWING_V1` from 180m (3h) to 300m (5 hours).
+  2. `paper/paper_engine.py`:
+     - Recalibrated Tier-1 ratchet trigger from +60 bps to +80 bps, and lock to Entry $\pm 35$ bps for both LONG and SHORT.
+  3. `scripts/test_quant_invariants.py`:
+     - Updated `RATCHET_TIERS` Tier 1 to 80 bps trigger / 35 bps lock.
+- **Verification Suites:**
+  - `test_quant_invariants.py`: 5/5 PASSED (100%).
+  - `test_phase4_dispatcher.py`: 4/4 PASSED (100%).
+  - `test_phase5_control.py`: 3/3 PASSED (100%).
+  - `test_os_foundation.py`: 6/6 PASSED (100%).
+  - `test_crypto_copilot.py`: 6/6 PASSED (100%).
+- **Deployment Status:** LOCAL CODE VERIFIED (100% tests passed). Awaiting user deploy command per INV-OPS-001.
+
+
 
 
 

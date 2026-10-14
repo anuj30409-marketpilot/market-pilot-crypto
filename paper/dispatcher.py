@@ -70,13 +70,13 @@ STRATEGY_PROFILES = {
     "STRAT_SWING_MOMENTUM_V1": {
         "sl_pct": 0.60,
         "tp_pct": 1.60,
-        "max_hold_ms": 180 * 60 * 1000,  # 3 hours (volatility diffusion envelope for 160 bps)
+        "max_hold_ms": 300 * 60 * 1000,  # 5 hours (volatility diffusion envelope for 160 bps = ₹5,000 INR)
         "leverage": 5,
     },
     "STRAT_SUPERHUMAN_SWING_V1": {
         "sl_pct": 0.60,
         "tp_pct": 1.60,
-        "max_hold_ms": 180 * 60 * 1000,  # 3 hours (captures 15m EMA pullback extensions)
+        "max_hold_ms": 300 * 60 * 1000,  # 5 hours (volatility diffusion envelope for 160 bps = ₹5,000 INR)
         "leverage": 5,
     },
 }

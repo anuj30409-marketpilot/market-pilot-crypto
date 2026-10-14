@@ -15,7 +15,7 @@ NOISE_FLOOR_1M_BPS_95 = 15.0
 
 # Calibrated ratchet parameters
 RATCHET_TIERS = [
-    {"name": "Tier 1", "trigger_bps": 60.0, "lock_bps": 22.0},
+    {"name": "Tier 1", "trigger_bps": 80.0, "lock_bps": 35.0},
     {"name": "Tier 2", "trigger_bps": 95.0, "lock_bps": 60.0},
     {"name": "Tier 3", "trigger_bps": 140.0, "lock_bps": 100.0},
 ]
