@@ -243,7 +243,7 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
     origin="SUPERHUMAN", desk="SUPERHUMAN"
     """
     from strategies.swing_momentum import (
-        resample_1m_to_15m, _ema, _adx,
+        resample_1m_to_15m, _ema, _adx, _atr_bps,
         BAR_SIZE_MINUTES, EMA_FAST_15M, EMA_SLOW_15M, ADX_PERIOD_15M, MIN_15M_BARS
     )
 
@@ -277,11 +277,13 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
         rejections.append("REJECT_INSUFFICIENT_DATA")
         direction = None
         adx_val = None
+        atr_15m_bps = None
         expected_edge_bps = 0.0
     else:
         ema_fast = _ema(c_15m, EMA_FAST_15M)
         ema_slow = _ema(c_15m, EMA_SLOW_15M)
         adx_val  = _adx(h_15m, l_15m, c_15m, ADX_PERIOD_15M)
+        atr_15m_bps = _atr_bps(h_15m, l_15m, c_15m, period=8)
 
         current_close = closes[-1] if closes else ob.mid_price
         recent_15m_lows = lows[-30:] if len(lows) >= 30 else lows
@@ -316,6 +318,12 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
             rejections.append("REJECT_OI_CONTRACTION_UNWIND")
             direction = None
 
+        # 3b. 15m ATR Volatility Vitality Gate (Reject low volatility chop to prevent TIME_STOP paper cuts)
+        MIN_15M_ATR_BPS = 18.0
+        if direction is not None and atr_15m_bps is not None and atr_15m_bps < MIN_15M_ATR_BPS:
+            rejections.append("REJECT_LOW_VOLATILITY_CHOP")
+            direction = None
+
         # 4. Book trap filter: reject if counter-trend depth skew > 0.35
         if direction == "LONG" and ob.imbalance_5 < -0.35:
             rejections.append("REJECT_COUNTER_TREND_BOOK_TRAP")
@@ -348,7 +356,7 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
     decision = "ACCEPT" if not rejections else "REJECT"
     if decision == "ACCEPT":
         decision_reason = (
-            f"SH4 15m {direction} swing pullback: ADX={adx_val:.1f}, CVD_z={cvd_z:+.2f}, "
+            f"SH4 15m {direction} swing pullback: ADX={adx_val:.1f}, ATR_15m={atr_15m_bps:.1f}bps, CVD_z={cvd_z:+.2f}, "
             f"net_edge={expected_net_edge_bps:.1f} bps, book_imb={ob.imbalance_5:+.2f}"
         )
         hypothetical_entry = ob.best_ask if direction == "LONG" else ob.best_bid

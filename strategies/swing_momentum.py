@@ -90,6 +90,23 @@ def _true_range(high: float, low: float, prev_close: float) -> float:
     return max(high - low, abs(high - prev_close), abs(low - prev_close))
 
 
+def _atr_bps(highs: List[float], lows: List[float], closes: List[float], period: int = 8) -> Optional[float]:
+    """Computes ATR normalized in basis points of the current close price."""
+    if len(closes) < period + 1:
+        return None
+    tr_list = []
+    for i in range(1, len(closes)):
+        tr = _true_range(highs[i], lows[i], closes[i - 1])
+        tr_list.append(tr)
+    if len(tr_list) < period:
+        return None
+    atr = sum(tr_list[-period:]) / period
+    current_price = closes[-1]
+    if current_price <= 0:
+        return None
+    return (atr / current_price) * 10000.0  # Normalized in bps
+
+
 def _adx(highs: List[float], lows: List[float], closes: List[float], period: int = 8) -> Optional[float]:
     """Wilder-smoothed ADX for 15m aggregated bars."""
     required = period * 2 + 1
@@ -174,12 +191,13 @@ def evaluate_swing_momentum(
     if len(c_15m) < MIN_15M_BARS:
         rejection_codes.append("REJECT_INSUFFICIENT_DATA")
         direction = None
-        ema_fast = ema_slow = adx_val = None
+        ema_fast = ema_slow = adx_val = atr_15m_bps = None
     else:
         # 4. Compute 15m Multi-Timeframe Trend Filters
         ema_fast = _ema(c_15m, EMA_FAST_15M)
         ema_slow = _ema(c_15m, EMA_SLOW_15M)
         adx_val  = _adx(h_15m, l_15m, c_15m, ADX_PERIOD_15M)
+        atr_15m_bps = _atr_bps(h_15m, l_15m, c_15m, period=8)
 
         current_close = closes[-1] if closes else ob.mid_price
         recent_15m_lows = lows[-30:] if len(lows) >= 30 else lows
@@ -218,6 +236,18 @@ def evaluate_swing_momentum(
         else:
             rejection_codes.append("REJECT_SIGNAL_THRESHOLD_NOT_MET")
 
+        # 5b. Open Interest Unwind Filter (Ported from SH4: reject fakeouts when market is unwinding positions)
+        oi_pct_1h = getattr(deriv, "oi_change_pct_1h", 0.0)
+        if direction is not None and oi_pct_1h < -1.0:
+            rejection_codes.append("REJECT_OI_CONTRACTION_UNWIND")
+            direction = None
+
+        # 5c. 15m ATR Volatility Vitality Gate (Reject low volatility chop to prevent TIME_STOP paper cuts)
+        MIN_15M_ATR_BPS = 18.0
+        if direction is not None and atr_15m_bps is not None and atr_15m_bps < MIN_15M_ATR_BPS:
+            rejection_codes.append("REJECT_LOW_VOLATILITY_CHOP")
+            direction = None
+
     # 6. Edge calculation
     if direction is not None:
         adx_factor = (adx_val / 20.0) if adx_val else 1.0
@@ -241,7 +271,7 @@ def evaluate_swing_momentum(
         decision_reason = (
             f"S4 15m {direction} EMA-pullback: "
             f"EMA_15m_fast={ema_fast:.2f}, EMA_15m_slow={ema_slow:.2f}, "
-            f"ADX_15m={adx_val:.1f}, CVD_z={cvd_z:+.2f}, "
+            f"ADX_15m={adx_val:.1f}, ATR_15m={atr_15m_bps:.1f}bps, CVD_z={cvd_z:+.2f}, "
             f"net_edge={expected_net_edge_bps:.1f} bps"
         )
     else:

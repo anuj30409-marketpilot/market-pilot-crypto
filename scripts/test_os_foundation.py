@@ -338,7 +338,100 @@ def test_strategies_evaluation():
     assert cand_s3.expected_edge_bps >= 20.0
     print("      [OK] Strategy 3 (Liquidation Fader) evaluated and ACCEPTED.")
 
-    # 4. Test Strategy Evaluator bootstrap
+    # 4. Test Strategy 4 (Swing Momentum) & SH4 (Superhuman Swing) ATR Vitality Gate and OI Filter
+    from strategies.swing_momentum import evaluate_swing_momentum, _ema, resample_1m_to_15m
+    from strategies.superhuman_evaluator import evaluate_superhuman_swing
+
+    def _build_test_tracker(atr_bps_target=35.0):
+        closes = []
+        p = 80000.0
+        for i in range(270):
+            p += 5.0
+            closes.append(p)
+        fast_ema = 81350.0
+        for i in range(30):
+            closes.append(fast_ema * 1.0005)
+        spread = (closes[-1] * atr_bps_target / 10000.0) / 2.0
+        highs = [c + spread for c in closes]
+        lows = [c - spread for c in closes]
+        lows[-15] = fast_ema * 1.001
+        class T:
+            pass
+        t = T()
+        t.recent_closes = closes
+        t.recent_highs = highs
+        t.recent_lows = lows
+        t.recent_volumes = [100.0] * len(closes)
+        return t
+
+    curr_p = 81350.0 * 1.0005
+    ob_s4 = OrderbookSnapshot(
+        symbol="BTCUSDT", market_type="FUTURES", best_bid=curr_p, best_ask=curr_p + 1.0,
+        mid_price=curr_p + 0.5, microprice=curr_p + 0.5, spread=1.0, spread_bps=1.2,
+        microprice_edge_bps=0.0, bid_depth_5=10.0, ask_depth_5=10.0,
+        imbalance_1=0.2, imbalance_3=0.2, imbalance_5=0.2, imbalance_10=0.2,
+        bid_notional_5=800000.0, ask_notional_5=800000.0, notional_imbalance_5=0.0,
+        bid_depth_20=50.0, ask_depth_20=50.0, imbalance_20=0.0,
+        update_id=1, event_time_ms=now_ms, received_at_ms=now_ms
+    )
+
+    # 4a. Low ATR Gate (< 18.0 bps)
+    t_low = _build_test_tracker(atr_bps_target=10.0)
+    deriv_s4_low = DerivativesState(
+        symbol="BTCUSDT", mark_price=curr_p, index_price=curr_p, basis_bps=0.0,
+        open_interest=50000.0, funding_rate=0.0001, funding_interval_hours=8,
+        annualized_funding=3.28, funding_zscore_7d=0.0, funding_percentile=50.0,
+        distance_to_next_funding_mins=300, predicted_funding=0.0001,
+        cvd_1m=10.0, cvd_notional_usd_1m=800000.0, cvd_notional_usd_zscore=1.5,
+        taker_buy_ratio_1m=0.6, liquidation_notional_60s=0.0, liquidation_intensity=0.0,
+        liquidation_oi_impact=0.0, regime="TRENDING_UP", quarantine_state="NORMAL",
+        state_time_ms=now_ms, created_at_iso=ms_to_iso(now_ms),
+        oi_change_pct_1h=0.5
+    )
+    cand_s4_low = evaluate_swing_momentum(deriv_s4_low, ob_s4, t_low)
+    cand_sh4_low = evaluate_superhuman_swing(deriv_s4_low, ob_s4, t_low)
+    assert cand_s4_low.decision == "REJECT" and "REJECT_LOW_VOLATILITY_CHOP" in cand_s4_low.rejection_codes
+    assert cand_sh4_low.decision == "REJECT" and "REJECT_LOW_VOLATILITY_CHOP" in cand_sh4_low.rejection_codes
+    print("      [OK] Strategy 4 & SH4 Low Volatility Chop Gate (<18 bps) verified.")
+
+    # 4b. OI Unwind Filter (< -1.0%)
+    t_high = _build_test_tracker(atr_bps_target=35.0)
+    deriv_s4_unwind = DerivativesState(
+        symbol="BTCUSDT", mark_price=curr_p, index_price=curr_p, basis_bps=0.0,
+        open_interest=50000.0, funding_rate=0.0001, funding_interval_hours=8,
+        annualized_funding=3.28, funding_zscore_7d=0.0, funding_percentile=50.0,
+        distance_to_next_funding_mins=300, predicted_funding=0.0001,
+        cvd_1m=10.0, cvd_notional_usd_1m=800000.0, cvd_notional_usd_zscore=1.5,
+        taker_buy_ratio_1m=0.6, liquidation_notional_60s=0.0, liquidation_intensity=0.0,
+        liquidation_oi_impact=0.0, regime="TRENDING_UP", quarantine_state="NORMAL",
+        state_time_ms=now_ms, created_at_iso=ms_to_iso(now_ms),
+        oi_change_pct_1h=-1.5
+    )
+    cand_s4_unwind = evaluate_swing_momentum(deriv_s4_unwind, ob_s4, t_high)
+    cand_sh4_unwind = evaluate_superhuman_swing(deriv_s4_unwind, ob_s4, t_high)
+    assert cand_s4_unwind.decision == "REJECT" and "REJECT_OI_CONTRACTION_UNWIND" in cand_s4_unwind.rejection_codes
+    assert cand_sh4_unwind.decision == "REJECT" and "REJECT_OI_CONTRACTION_UNWIND" in cand_sh4_unwind.rejection_codes
+    print("      [OK] Strategy 4 & SH4 Open Interest Unwind Filter verified.")
+
+    # 4c. Clean Setup Accept
+    deriv_s4_clean = DerivativesState(
+        symbol="BTCUSDT", mark_price=curr_p, index_price=curr_p, basis_bps=0.0,
+        open_interest=50000.0, funding_rate=0.0001, funding_interval_hours=8,
+        annualized_funding=3.28, funding_zscore_7d=0.0, funding_percentile=50.0,
+        distance_to_next_funding_mins=300, predicted_funding=0.0001,
+        cvd_1m=10.0, cvd_notional_usd_1m=800000.0, cvd_notional_usd_zscore=1.5,
+        taker_buy_ratio_1m=0.6, liquidation_notional_60s=0.0, liquidation_intensity=0.0,
+        liquidation_oi_impact=0.0, regime="TRENDING_UP", quarantine_state="NORMAL",
+        state_time_ms=now_ms, created_at_iso=ms_to_iso(now_ms),
+        oi_change_pct_1h=0.5
+    )
+    cand_s4_acc = evaluate_swing_momentum(deriv_s4_clean, ob_s4, t_high)
+    cand_sh4_acc = evaluate_superhuman_swing(deriv_s4_clean, ob_s4, t_high)
+    assert cand_s4_acc.decision == "ACCEPT", f"Expected S4 ACCEPT, got {cand_s4_acc.decision_reason}"
+    assert cand_sh4_acc.decision == "ACCEPT", f"Expected SH4 ACCEPT, got {cand_sh4_acc.decision_reason}"
+    print("      [OK] Strategy 4 & SH4 Clean 15m Pullback evaluated and ACCEPTED.")
+
+    # 5. Test Strategy Evaluator bootstrap
     strategies = strategy_evaluator.registry.get_active_strategies()
     assert len(strategies) >= 3, f"Expected at least 3 active strategies, got {len(strategies)}"
     print("      [OK] Strategy Evaluator registry initialization verified.")
