@@ -9,7 +9,7 @@ Regime constraints:
 Allowed only in FUNDING_EXTREME, RANGE, or LOW_VOLATILITY.
 Explicitly rejected in LIQUIDATION_EVENT or DATA_DEGRADED.
 """
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Any
 from core.contracts import DerivativesState, OrderbookSnapshot, CandidateRecord
 from core.regime import MarketRegime
 from core.clock import now_utc_ms, ms_to_iso
@@ -33,6 +33,7 @@ def evaluate_funding_reversion(
     taker_fee_bps: float = 5.0,
     slippage_reserve_bps: float = 2.0,
     min_net_edge_bps: float = 3.0,
+    tracker: Optional[Any] = None,
 ) -> CandidateRecord:
     """Evaluates the Funding & Basis Mean-Reversion strategy against current state."""
     now_ms = now_utc_ms()
@@ -65,6 +66,28 @@ def evaluate_funding_reversion(
         ob.microprice_edge_bps <= 0.0 and
         deriv.distance_to_next_funding_mins <= 240
     )
+
+    # Macro Regime Veto: Never long carry into TRENDING_DOWN, never short carry into TRENDING_UP
+    if is_long and deriv.regime == "TRENDING_DOWN":
+        rejection_codes.append("REJECT_OPPOSING_MACRO_REGIME")
+        is_long = False
+    elif is_short and deriv.regime == "TRENDING_UP":
+        rejection_codes.append("REJECT_OPPOSING_MACRO_REGIME")
+        is_short = False
+
+    # Higher-Timeframe (15m) Trend Alignment Check (prevents catching falling knives)
+    if tracker and hasattr(tracker, "recent_closes") and len(tracker.recent_closes) >= 90:
+        from strategies.swing_momentum import resample_1m_to_15m, _ema, EMA_FAST_15M, EMA_SLOW_15M
+        c_15m, _, _, _ = resample_1m_to_15m(tracker.recent_closes, tracker.recent_highs, tracker.recent_lows, tracker.recent_volumes)
+        ema_fast = _ema(c_15m, EMA_FAST_15M)
+        ema_slow = _ema(c_15m, EMA_SLOW_15M)
+        if ema_fast is not None and ema_slow is not None:
+            if is_long and ema_fast < ema_slow:
+                rejections.append("REJECT_OPPOSING_HTF_TREND")
+                is_long = False
+            elif is_short and ema_fast > ema_slow:
+                rejections.append("REJECT_OPPOSING_HTF_TREND")
+                is_short = False
 
     cvd_z = getattr(deriv, "cvd_notional_usd_zscore", 0.0)
     # Macro flow veto: Never short carry into positive buyer flow (> 0.3z) or long carry into negative seller flow (< -0.3z)

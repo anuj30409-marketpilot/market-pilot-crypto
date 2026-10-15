@@ -32,7 +32,7 @@ SH3_ID = "STRAT_SUPERHUMAN_VOLATILITY_EXPANSION_V1"
 SH4_ID = "STRAT_SUPERHUMAN_SWING_V1"
 
 
-def evaluate_superhuman_macro_regime(deriv: DerivativesState, ob: OrderbookSnapshot) -> CandidateRecord:
+def evaluate_superhuman_macro_regime(deriv: DerivativesState, ob: OrderbookSnapshot, tracker=None) -> CandidateRecord:
     now_ms = now_utc_ms()
     cand_id = f"CAND-SH1-{deriv.symbol}-{now_ms}"
     rejections = []
@@ -66,6 +66,23 @@ def evaluate_superhuman_macro_regime(deriv: DerivativesState, ob: OrderbookSnaps
         rejections.append("REJECT_EDGE_TOO_SMALL")
 
     direction = "LONG" if cvd_z >= 0 else "SHORT"
+
+    # Symmetric Overextension Clamp (Auditor Approved: MAX_PULLBACK_EXTENSION_PCT = 0.0040 / 40 bps)
+    # Prevents shorting climax bottom wicks or buying blow-off tops when price is stretched >40 bps beyond 15m Fast EMA
+    MAX_PULLBACK_EXTENSION_PCT = 0.0040
+    if tracker and hasattr(tracker, "recent_closes") and len(tracker.recent_closes) >= 90:
+        from strategies.swing_momentum import resample_1m_to_15m, _ema, EMA_FAST_15M
+        c_15m, _, _, _ = resample_1m_to_15m(tracker.recent_closes, tracker.recent_highs, tracker.recent_lows, tracker.recent_volumes)
+        ema_fast = _ema(c_15m, EMA_FAST_15M)
+        if ema_fast is not None:
+            current_close = tracker.recent_closes[-1]
+            if direction == "LONG" and current_close > ema_fast * (1.0 + MAX_PULLBACK_EXTENSION_PCT):
+                rejections.append("REJECT_OVEREXTENDED_PULLBACK")
+                direction = None
+            elif direction == "SHORT" and current_close < ema_fast * (1.0 - MAX_PULLBACK_EXTENSION_PCT):
+                rejections.append("REJECT_OVEREXTENDED_PULLBACK")
+                direction = None
+
     decision = "ACCEPT" if not rejections else "REJECT"
     decision_reason = (
         f"Accepted: Superhuman Macro Regime Impulse {direction} (cvd_z={cvd_z:+.2f})"
@@ -456,7 +473,7 @@ class SuperhumanEvaluator:
 
             tracker = derivatives_engine.trackers.get(upper)
 
-            c1 = evaluate_superhuman_macro_regime(deriv, ob)
+            c1 = evaluate_superhuman_macro_regime(deriv, ob, tracker=tracker)
             # SH2 (CROSS_VENUE) Unparked — Delta India live feed now wired in execution/parity.py
             c2 = evaluate_superhuman_cross_venue(deriv, ob)
             c3 = evaluate_superhuman_vol_expansion(deriv, ob)

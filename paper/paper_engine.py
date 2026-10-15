@@ -110,6 +110,7 @@ class PaperPosition:
     # Copilot Phase 2 Defensive Execution State
     defense_stress_streak_s: int = 0
     defense_tier1_applied: bool = False
+    sti_stress_streak_s: int = 0
 
     def update_mark(self, mark: float):
         self.mark_price = mark
@@ -164,6 +165,7 @@ class PaperPosition:
             "desk": self.desk,
             "defense_stress_streak_s": self.defense_stress_streak_s,
             "defense_tier1_applied": self.defense_tier1_applied,
+            "sti_stress_streak_s": self.sti_stress_streak_s,
         }
 
 
@@ -597,16 +599,22 @@ class PaperEngine:
         elapsed_ms = now_utc_ms() - pos.opened_at_ms
 
         # Structural Thesis Invalidation (STI):
-        # Discards the flawed -15 bps noise snare (which produced 54 trades, -$311.86 loss at -0.26 sigma noise).
-        # Only exits early if the structural regime flips or CVD flow momentum violently inverts (>= 1.8 sigma) against the trade.
+        # Requires persistent structural breakdown (>= 60 seconds) rather than a 1-second transient sweep.
+        # Only exits early if opposing regime AND violent CVD flow momentum (>= 1.8 sigma) persist continuously.
         tracker = derivatives_engine.trackers.get(pos.symbol)
         if not hit and tracker:
             state = tracker.get_state()
             if state:
-                if pos.direction == "LONG" and state.regime == "TRENDING_DOWN" and state.cvd_notional_usd_zscore <= -1.8:
-                    hit, reason, gap = True, "STRUCTURAL_THESIS_INVALIDATION", False
-                elif pos.direction == "SHORT" and state.regime == "TRENDING_UP" and state.cvd_notional_usd_zscore >= 1.8:
-                    hit, reason, gap = True, "STRUCTURAL_THESIS_INVALIDATION", False
+                sti_condition = (
+                    (pos.direction == "LONG" and state.regime == "TRENDING_DOWN" and state.cvd_notional_usd_zscore <= -1.8) or
+                    (pos.direction == "SHORT" and state.regime == "TRENDING_UP" and state.cvd_notional_usd_zscore >= 1.8)
+                )
+                if sti_condition:
+                    pos.sti_stress_streak_s = getattr(pos, "sti_stress_streak_s", 0) + 1
+                    if pos.sti_stress_streak_s >= 60:
+                        hit, reason, gap = True, "STRUCTURAL_THESIS_INVALIDATION", False
+                else:
+                    pos.sti_stress_streak_s = 0
 
         # ── COPILOT PHASE 2: ACTIVE DEFENSIVE HOOK ──────────────────────────────
         # Single-Master Execution Hook (Auditor Approved with 3 Amendments)

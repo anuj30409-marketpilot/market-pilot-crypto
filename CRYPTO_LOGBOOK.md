@@ -376,6 +376,32 @@
   - `test_crypto_copilot.py`: 6/6 PASSED (100%).
 - **Deployment Status:** LOCAL CODE VERIFIED (100% tests passed). Awaiting user deploy command per INV-OPS-001.
 
+### 2026-10-15: Systemic Architectural Fixes — HTF Trend Gate on S1, 40bps Clamp on SH1 & 60s STI Persistence (Approved by User)
+- **Problem & Context:**
+  1. User challenged why the same failure modes recurred despite logbook entries.
+  2. Independent forensic audit by `independent_quant_auditor` revealed 3 structural gaps causing -$165.43 post-deploy churn:
+     - *Timeframe Mismatch on S1:* Gating an 8h carry trade with a 1m rolling CVD metric allowed S1 to long into a -12% liquidation crash during 60s cascade lulls (-$61.17 loss).
+     - *Incomplete Extension Clamp Diffusion:* The 40 bps clamp applied on Oct 13 to S4/SH4 was omitted from SH1 (`STRAT_SUPERHUMAN_MACRO_REGIME_V1`), causing SH1 to short the bottom wick at $2,345 twice (-$68.98 loss).
+     - *Single-Tick Hair-Trigger on STI:* STI evaluated every 1s with zero persistence, triggering market exits on transient 5s sweeps (-$89.92 across 6 trades).
+- **Independent Quant Audit (`independent_quant_auditor`):**
+  1. *Approved with 3 Mandatory Architectural Enhancements:*
+     - S1 Macro Trend Gate: Mandates 15m HTF Trend Alignment ($EMA_{15\text{m, fast}} \ge EMA_{15\text{m, slow}}$) and bars LONG in `TRENDING_DOWN` / SHORT in `TRENDING_UP`.
+     - SH1 Extension Clamp: Enforces `MAX_PULLBACK_EXTENSION_PCT = 0.0040` (40 bps) across SH1.
+     - STI Persistence Window: Mandates $\ge 60\text{s}$ continuous opposing regime and $|cvd\_z| \ge 1.8\sigma$ before invalidating positions.
+  2. *Quantitative Invariants & Big Wins:* All 5 invariants pass 100%. Verified that the big-win mechanics (+160 bps on $3.9k = +$66.59 / ₹5,726.50 INR) remain intact while eliminating -$220.07 in churn drag.
+- **Changes Applied:**
+  1. `strategies/funding_reversion.py` & `strategies/evaluator.py`: Gated S1 by 15m HTF EMA trend and macro regime.
+  2. `strategies/superhuman_evaluator.py`: Enforced 40 bps Fast EMA extension clamp on SH1.
+  3. `paper/paper_engine.py`: Added 60-second persistence streak (`sti_stress_streak_s >= 60`) to STI.
+- **Verification Suites:**
+  - `test_quant_invariants.py`: 5/5 PASSED (100%).
+  - `test_phase4_dispatcher.py`: 4/4 PASSED (100%).
+  - `test_phase5_control.py`: 3/3 PASSED (100%).
+  - `test_os_foundation.py`: 6/6 PASSED (100%).
+  - `test_crypto_copilot.py`: 6/6 PASSED (100%).
+- **Deployment Status:** LOCAL CODE VERIFIED (100% tests passed). Awaiting user deploy command per INV-OPS-001.
+
+
 
 
 

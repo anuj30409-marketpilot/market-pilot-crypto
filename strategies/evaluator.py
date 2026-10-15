@@ -125,7 +125,7 @@ class StrategyEvaluator:
             tracker = derivatives_engine.trackers.get(upper)
 
             # Evaluate Strategy 1, 2, 3, 4
-            cand1 = evaluate_funding_reversion(deriv, ob)
+            cand1 = evaluate_funding_reversion(deriv, ob, tracker=tracker)
             cand2 = evaluate_orderbook_momentum(deriv, ob)
             cand3 = evaluate_liquidation_fader(deriv, ob)
             cand4 = evaluate_swing_momentum(deriv, ob, tracker)
