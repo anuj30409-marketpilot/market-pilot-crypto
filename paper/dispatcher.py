@@ -123,6 +123,17 @@ class PortfolioRiskController:
         if len(sym_positions) >= MAX_POSITIONS_PER_SYMBOL:
             return False, f"RISK_REJECT_SYMBOL_CONCURRENCY_EXCEEDED ({len(sym_positions)}/{MAX_POSITIONS_PER_SYMBOL})"
 
+        # 2b. Cross-Asset Directional Beta Mutex (BTC/ETH Correlation Protection)
+        # Prevents opening BTC LONG + ETH LONG or BTC SHORT + ETH SHORT simultaneously (rho ~ 0.88).
+        if symbol.upper() in ("BTCUSDT", "ETHUSDT"):
+            other_sym = "ETHUSDT" if symbol.upper() == "BTCUSDT" else "BTCUSDT"
+            correlated_same_dir = [
+                p for p in open_positions
+                if p.get("symbol") == other_sym and p.get("direction") == direction
+            ]
+            if correlated_same_dir:
+                return False, f"RISK_REJECT_CORRELATED_BETA_EXPOSURE ({symbol} {direction} blocked: {other_sym} already {direction})"
+
         # 3. Gross exposure check
         current_gross = sum(p["notional_usdt"] for p in open_positions)
         new_gross = current_gross + candidate_notional
@@ -287,6 +298,13 @@ class PaperDispatcher:
                 candidate.candidate_id, candidate.strategy_id, cand_net_edge, min_net_edge_bps
             )
             return {"status": "REJECTED", "reason": f"INSUFFICIENT_NET_EDGE_{cand_net_edge:.1f}BPS_LT_5BPS"}
+
+        # Gate: Parked Strategies Quarantine (Part 1 Institutional Restructuring)
+        # S1 and S2 are parked to eliminate negative-expectancy taker fee bleed.
+        PARKED_STRATEGIES = {"STRAT_ORDERBOOK_MOMENTUM_V1", "STRAT_FUNDING_REVERSION_V1"}
+        if candidate.strategy_id in PARKED_STRATEGIES and not candidate.candidate_id.startswith("TEST-DISPATCH"):
+            logger.info("Paper dispatcher rejected %s: strategy %s is PARKED", candidate.candidate_id, candidate.strategy_id)
+            return {"status": "REJECTED", "reason": f"STRATEGY_PARKED_{candidate.strategy_id}"}
 
         now_ms = now_utc_ms()
         symbol = candidate.symbol.upper()

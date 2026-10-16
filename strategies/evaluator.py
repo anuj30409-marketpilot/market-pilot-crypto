@@ -16,6 +16,9 @@ from storage.registry import StrategyRegistry, StrategyDefinition, StrategyStatu
 from collectors.binance_ws import collector
 from collectors.derivatives import derivatives_engine
 
+from core.clock import now_utc_ms, ms_to_iso
+from config.currency import currency_service
+
 from strategies.funding_reversion import evaluate_funding_reversion, STRATEGY_ID as S1_ID
 from strategies.orderbook_momentum import evaluate_orderbook_momentum, STRATEGY_ID as S2_ID
 from strategies.liquidation_fader import evaluate_liquidation_fader, STRATEGY_ID as S3_ID
@@ -124,9 +127,61 @@ class StrategyEvaluator:
             # Get tracker for S4 raw list access (recent_closes, highs, lows, volumes)
             tracker = derivatives_engine.trackers.get(upper)
 
-            # Evaluate Strategy 1, 2, 3, 4
-            cand1 = evaluate_funding_reversion(deriv, ob, tracker=tracker)
-            cand2 = evaluate_orderbook_momentum(deriv, ob)
+            now_ms = now_utc_ms()
+            # Strategy 1 (Funding Reversion) and Strategy 2 (Orderbook Scalper) are PARKED
+            # per institutional portfolio restructuring to halt negative-expectancy taker fee bleed.
+            cand1 = CandidateRecord(
+                candidate_id=f"CAND-S1-{upper}-{now_ms}",
+                timestamp_ms=now_ms,
+                symbol=upper,
+                origin="QUANT",
+                engine_version="v2.0-S1-PARKED",
+                model_version="carry-reversion-v1",
+                signal_version="v2.0",
+                decision="REJECT",
+                decision_reason="Strategy S1 (Funding Reversion) is PARKED per institutional portfolio restructuring.",
+                hypothetical_entry=ob.mid_price,
+                strategy_id="STRAT_FUNDING_REVERSION_V1",
+                strategy_version="1.0.0",
+                feature_version="1.0",
+                parameter_version="1.0",
+                signal_score=0.0,
+                expected_edge_bps=0.0,
+                estimated_cost_bps=ob.spread_bps + 8.0,
+                expected_net_edge_bps=-8.0,
+                regime=deriv.regime,
+                rejection_codes=["REJECT_STRATEGY_PARKED"],
+                conversion_rate_applied=currency_service.get_rate("MARKET"),
+                research_venue="BINANCE",
+                execution_venue="DELTA_INDIA",
+                created_at_iso=ms_to_iso(now_ms),
+            )
+            cand2 = CandidateRecord(
+                candidate_id=f"CAND-S2-{upper}-{now_ms}",
+                timestamp_ms=now_ms,
+                symbol=upper,
+                origin="QUANT",
+                engine_version="v2.0-S2-PARKED",
+                model_version="orderbook-cvd-v1",
+                signal_version="v2.0",
+                decision="REJECT",
+                decision_reason="Strategy S2 (Orderbook Scalper) is PARKED per institutional portfolio restructuring (negative-expectancy taker fee drag).",
+                hypothetical_entry=ob.mid_price,
+                strategy_id="STRAT_ORDERBOOK_MOMENTUM_V1",
+                strategy_version="1.0.0",
+                feature_version="1.0",
+                parameter_version="1.0",
+                signal_score=0.0,
+                expected_edge_bps=0.0,
+                estimated_cost_bps=ob.spread_bps + 8.0,
+                expected_net_edge_bps=-8.0,
+                regime=deriv.regime,
+                rejection_codes=["REJECT_STRATEGY_PARKED"],
+                conversion_rate_applied=currency_service.get_rate("MARKET"),
+                research_venue="BINANCE",
+                execution_venue="DELTA_INDIA",
+                created_at_iso=ms_to_iso(now_ms),
+            )
             cand3 = evaluate_liquidation_fader(deriv, ob)
             cand4 = evaluate_swing_momentum(deriv, ob, tracker)
 

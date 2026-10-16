@@ -675,7 +675,29 @@ class PaperEngine:
 
         # Time-stop check based on strategy lifecycle (e.g. 20m, 60m, 2h, 8h)
         if not hit and pos.max_hold_ms and elapsed_ms >= pos.max_hold_ms:
-            hit, reason, gap = True, "TIME_STOP", False
+            # Floating Time-Stop for Armored Winning Runners (Part 2 Institutional Payoff Calibration):
+            # If the position has locked in guaranteed net profit via ratchets, or is floating in profit (>= +35 bps),
+            # do NOT truncate the runner with a premature TIME_STOP market exit!
+            # Let the runner float risk-free until it hits full Take Profit or exits at the locked profit stop.
+            is_armored_profit = (
+                (pos.direction == "LONG" and pos.stop_loss_price and pos.stop_loss_price >= pos.entry_price * 1.0020) or
+                (pos.direction == "SHORT" and pos.stop_loss_price and pos.stop_loss_price <= pos.entry_price * 0.9980)
+            )
+            floating_pnl_bps = ((mark - pos.entry_price) / pos.entry_price * 10000.0) if pos.direction == "LONG" else ((pos.entry_price - mark) / pos.entry_price * 10000.0)
+
+            if is_armored_profit or floating_pnl_bps >= 35.0:
+                # Runner is floating risk-free toward full +160 bps TP ($64 / ₹5,000 INR).
+                # If floating in profit >= 35 bps but stop loss not yet ratcheted to profit, lock in +20 bps now!
+                if pos.direction == "LONG" and (not pos.stop_loss_price or pos.stop_loss_price < pos.entry_price * 1.0020):
+                    pos.stop_loss_price = pos.entry_price * 1.0020
+                    sqlite_store.upsert_paper_position(pos.to_dict())
+                    logger.info(f"[FLOATING TIME-STOP RUNNER] {pos.symbol} LONG hold={elapsed_ms/3600000:.1f}h in profit ({floating_pnl_bps:.1f}bps). SL raised to lock +20bps @ {pos.stop_loss_price:.2f}. Runner permitted to float.")
+                elif pos.direction == "SHORT" and (not pos.stop_loss_price or pos.stop_loss_price > pos.entry_price * 0.9980):
+                    pos.stop_loss_price = pos.entry_price * 0.9980
+                    sqlite_store.upsert_paper_position(pos.to_dict())
+                    logger.info(f"[FLOATING TIME-STOP RUNNER] {pos.symbol} SHORT hold={elapsed_ms/3600000:.1f}h in profit ({floating_pnl_bps:.1f}bps). SL lowered to lock +20bps @ {pos.stop_loss_price:.2f}. Runner permitted to float.")
+            else:
+                hit, reason, gap = True, "TIME_STOP", False
 
         if hit:
             # Close inline — we're already under the lock

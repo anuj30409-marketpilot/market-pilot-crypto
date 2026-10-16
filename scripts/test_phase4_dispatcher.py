@@ -120,7 +120,31 @@ async def run_phase4_tests():
         )
         assert paper_dispatcher.infer_direction(mock_cand_s2_short) == "SHORT", "S2 flow SHORT must infer SHORT!"
 
-        print("      [OK] Concurrency limits, Daily DD, Consecutive Loss Breaker, and Canonical Direction Parsing verified.")
+        # 2e. Cross-Asset Directional Beta Mutex Verification (Part 3 Institutional Calibration)
+        open_pos_beta = [{"symbol": "BTCUSDT", "direction": "LONG", "notional_usdt": 3000.0}]
+        allowed_beta_same, reason_beta_same = risk_ctrl_streak.check_portfolio_limits("ETHUSDT", "LONG", 3000.0, open_pos_beta, [], equity, now_ms)
+        assert not allowed_beta_same and "RISK_REJECT_CORRELATED_BETA_EXPOSURE" in reason_beta_same, f"Beta Mutex failed to block correlated ETH LONG: {reason_beta_same}"
+
+        allowed_beta_opp, _ = risk_ctrl_streak.check_portfolio_limits("ETHUSDT", "SHORT", 3000.0, open_pos_beta, [], equity, now_ms)
+        assert allowed_beta_opp, "Beta Mutex should permit opposite-direction pairs hedge!"
+
+        # 2f. Floating Time-Stop for Armored Runners Verification (Part 2 Institutional Calibration)
+        from paper.paper_engine import PaperPosition
+        pos_armored = PaperPosition(
+            position_id="TEST-FLOAT-P4", symbol="BTCUSDT", direction="LONG", notional_usdt=3000.0,
+            leverage=5, entry_price=80000.0, entry_slippage_bps=1.0, entry_fee_usdt=0.6,
+            margin_usdt=600.0, mark_price=80400.0, unrealised_pnl=15.0, funding_paid_usdt=0.0,
+            total_fees_usdt=0.6, opened_at_ms=now_ms - (301 * 60 * 1000), # > 5 hours
+            last_funding_at_ms=now_ms, strategy_id="STRAT_SWING_MOMENTUM_V1",
+            max_hold_ms=300 * 60 * 1000, stop_loss_price=80280.0, # Tier-1 locked (+35 bps)
+            take_profit_price=81280.0
+        )
+        paper_engine._positions[pos_armored.position_id] = pos_armored
+        paper_engine._check_sl_tp(pos_armored)
+        assert pos_armored.status == "OPEN", f"Armored runner should remain OPEN past 5h, got {pos_armored.status}"
+        del paper_engine._positions[pos_armored.position_id]
+
+        print("      [OK] Concurrency limits, Daily DD, Consecutive Loss, Direction Parsing, Beta Mutex & Floating Time-Stop verified.")
 
         # 3. Test End-to-End Candidate Dispatch -> Orderbook Execution -> Provenance Sync
         print("[3/4] Testing Candidate Dispatch & Candidate Ledger Sync...")
