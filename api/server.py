@@ -316,13 +316,19 @@ def get_copilot_mode():
 
 @app.post("/paper/copilot/mode")
 def set_copilot_mode(req: CopilotModeRequest):
-    """Sets the Crypto Copilot execution mode."""
-    from config.settings import settings
+    """Sets and persists the Crypto Copilot execution mode across service restarts."""
+    import json
+    from config.settings import settings, COPILOT_CONFIG_FILE
     target_mode = req.mode.upper().strip()
     if target_mode not in ("ADVISORY", "ACTIVE_DEFENSE"):
         raise HTTPException(status_code=400, detail="Invalid mode. Must be 'ADVISORY' or 'ACTIVE_DEFENSE'.")
     settings.COPILOT_EXECUTION_MODE = target_mode
-    logger.info("Updated COPILOT_EXECUTION_MODE to %s", target_mode)
+    try:
+        with open(COPILOT_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump({"mode": target_mode, "updated_at_utc": now_utc_iso()}, f, indent=2)
+    except Exception as e:
+        logger.warning("Could not persist copilot_config.json: %s", e)
+    logger.info("Updated and persisted COPILOT_EXECUTION_MODE to %s", target_mode)
     return {"status": "UPDATED", "mode": target_mode}
 
 

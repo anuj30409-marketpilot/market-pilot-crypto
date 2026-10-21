@@ -198,19 +198,6 @@ def evaluate_crypto_copilot(
         tone = "positive"
         reason = f"Tier-2 profit armor active ({floating_bps:+.1f} bps). Stop locked at +60 bps net."
         crumbs.append({"tag": "Ratchet", "text": "Tier-2 locked (+60 bps)"})
-    elif floating_bps >= 60:
-        action = "ARMOR_LOCKED"
-        action_label = "Armor Active (Tier-1)"
-        tone = "positive"
-        reason = f"Tier-1 breakeven armor active ({floating_bps:+.1f} bps). Stop locked at +22 bps net."
-        crumbs.append({"tag": "Ratchet", "text": "Tier-1 locked (+22 bps)"})
-    elif 48 <= floating_bps < 60:
-        action = "RATCHET_PRIMED"
-        action_label = "Approaching Tier-1 Armor"
-        tone = "positive"
-        pts_away = 60.0 - floating_bps
-        reason = f"Floating {floating_bps:+.1f} bps, within {pts_away:.1f} bps of Tier-1 Breakeven Armor (+60 bps)."
-        crumbs.append({"tag": "Ratchet", "text": f"{pts_away:.1f} bps to Tier-1"})
     elif 85 <= floating_bps < 95:
         action = "RATCHET_PRIMED"
         action_label = "Approaching Tier-2 Armor"
@@ -218,6 +205,19 @@ def evaluate_crypto_copilot(
         pts_away = 95.0 - floating_bps
         reason = f"Floating {floating_bps:+.1f} bps, within {pts_away:.1f} bps of Tier-2 Profit Armor (+95 bps)."
         crumbs.append({"tag": "Ratchet", "text": f"{pts_away:.1f} bps to Tier-2"})
+    elif floating_bps >= 80 or locked_profit_usd > 0:
+        action = "ARMOR_LOCKED"
+        action_label = "Armor Active (Tier-1)"
+        tone = "positive"
+        reason = f"Tier-1 breakeven armor active ({floating_bps:+.1f} bps). Stop locked at +35 bps net."
+        crumbs.append({"tag": "Ratchet", "text": "Tier-1 locked (+35 bps)"})
+    elif 48 <= floating_bps < 80:
+        action = "RATCHET_PRIMED"
+        action_label = "Approaching Tier-1 Armor"
+        tone = "positive"
+        pts_away = 80.0 - floating_bps
+        reason = f"Floating {floating_bps:+.1f} bps, within {pts_away:.1f} bps of Tier-1 Breakeven Armor (+80 bps)."
+        crumbs.append({"tag": "Ratchet", "text": f"{pts_away:.1f} bps to Tier-1"})
     elif flow_align <= -1.5 or (regime == "TRENDING_DOWN" and direction == "LONG") or (regime == "TRENDING_UP" and direction == "SHORT"):
         action = "STI_EARLY_WARNING"
         action_label = "STI Invalidation Watch"

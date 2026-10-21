@@ -445,16 +445,46 @@
   - `test_phase5_control.py`: 3/3 PASSED (100%).
   - `test_os_foundation.py`: 6/6 PASSED (100%).
   - `test_crypto_copilot.py`: 6/6 PASSED (100%).
-- **Deployment Status:** LOCAL CODE VERIFIED (100% tests passed). Ready for Git commit and Oracle VM 2 deployment per user instruction.
+- **Deployment Status:** DEPLOYED TO ORACLE VM 2 (Commit bdd3c28, PID 198856).
 
-
-
-
-
-
-
-
-
-
-
+### 2026-10-21: Deep Crypto Project Review & Auditor-Amended 3-Phase Institutional Maturity Implementation (Approved by User)
+- **Problem & Context:**
+  1. User requested a zero-assumption, fact-based deep review of the entire crypto project (market data, trade data, technicals, fundamentals, execution, and last 4–5 sessions in `CRYPTO_LOGBOOK.md`), followed by an independent expert agent audit (`independent_quant_auditor`).
+  2. Live forensic telemetry audit of Oracle VM 2 (`129.154.244.236`, commit `bdd3c28`) across 403 closed trades (27 in Epoch 4 since Oct 16) revealed:
+     - *Epoch 4 Breakthrough:* Overall win rate rose from `31.91%` to **`48.15%`**, and `STRAT_SUPERHUMAN_MACRO_REGIME_V1` (`SH1`) generated **`+$114.51` net profit across 15 trades (`60.0%` WR, `2.07` Profit Factor)**.
+     - *10 Code-Verified Structural Defects (`D1`–`D10`):*
+       - **D1:** `get_bid_levels()` in `paper/slippage.py` used `reversed(snap.items())` on an already descending `bids` dictionary (`collectors/orderbook.py`), walking from the 20th worst bid level first and inflating exit slippage to `6.8–9.2 bps` on liquid `BTC`/`ETH`.
+       - **D2:** `S4` & `SH4` (`-$164.26` combined in Epoch 4) entered falling knives on `15m` pullbacks without checking if the `1m` candle was bouncing (`closes[-1] >= closes[-2]`) or if the `15m` Fast EMA was collapsing.
+       - **D3:** `resample_1m_to_15m()` used `remainder = n % 15` instead of UTC clock boundaries (`:00, :15, :30, :45`), phase-shifting all historical `15m` bars every 60 seconds and omitting `b[9]` (`taker_buy_base_volume`) during REST warmup.
+       - **D4:** `paper/dispatcher.py` queried `sqlite_store.get_paper_positions(status="OPEN")` without `desk=desk`, enforcing a global symbol/beta mutex where `QUANT` blocked `OVERMIND` (violating Operating Rule 3).
+       - **D5:** Ratcheted profit-lock stops (`+35 bps` / `+60 bps` / `+100 bps`) were labeled `STOP_LOSS` instead of `RATCHET_PROFIT_LOCK`, penalizing winning trades with a 30m loser cooldown.
+       - **D6:** `S3`, `SH2`, and `SH3` evaluated 117,975 candidates with `0` accepts due to uncalibrated single-order vs 60s liquidation baselines and fee-dominated micro-thresholds.
+       - **D7:** `S4` (`STRAT_SWING_MOMENTUM_V1`) entered with `TAKER` fees (`4.0 bps`) despite identical `15m` pullback logic to `SH4` (`MAKER` `2.0 bps`).
+       - **D8:** `MLRetrainingEngine.get_status()` overwrote `data["next_retrain_at_utc"] = get_next_monday_utc()` on every read, preventing the Monday `00:00 UTC` scheduler from ever triggering, and `MicrostructuralFeatureStore` lacked `.groupby("symbol")` partitioning.
+       - **D9:** `COPILOT_EXECUTION_MODE` reset on service restart and Tier-1 UI text referenced legacy `+45/+18 bps` instead of `+80/+35 bps`.
+       - **D10:** `core/readiness.py` only incremented 7 of 16 gates (`max 7/16`), and `validate_gates.py` Gate 15 flagged Floating Time-Stop Runners as duration breaches.
+- **Independent Quant Audit (`independent_quant_auditor`):**
+  - **Verdict:** CONDITIONALLY APPROVED WITH 5 MANDATORY QUANTITATIVE AMENDMENTS (all 5 integrated into implementation):
+    1. Canonical explicit sorting in `get_ask_levels()` (`reverse=False`) and `get_bid_levels()` (`reverse=True`).
+    2. Separate `exit_reason = "RATCHET_PROFIT_LOCK"` from `gap_risk = True` in `paper/paper_engine.py` so stop-market execution realism and Invariant 1 are preserved while fixing telemetry and winner cooldowns.
+    3. Add `S4` to `MAKER_STRATEGIES` (mean-reversion limit pullback) while keeping `SH1` as `TAKER` (`1.60σ` directional CVD breakout where passive limits suffer adverse selection).
+    4. Park `S3`, `SH2`, `SH3` in evaluators/dispatcher (`PARKED_STRATEGIES`) while repairing `compute_liquidation_intensity()` in `collectors/derivatives.py` so the 7-state regime classifier accurately detects `LIQUIDATION_EVENT` cascades.
+    5. Partition `MicrostructuralFeatureStore.extract_features()` and `apply_triple_barrier_labels()` by `.groupby("symbol")` to prevent cross-asset price differencing between `BTCUSDT` and `ETHUSDT`.
+- **Changes Applied:**
+  1. `paper/slippage.py`: Fixed `get_ask_levels()` and `get_bid_levels()` to sort explicitly by price ascending and descending.
+  2. `paper/paper_engine.py`: Classified profitable ratcheted stop triggers as `RATCHET_PROFIT_LOCK` while retaining `gap=True`.
+  3. `paper/dispatcher.py`: Scoped `desk_open_positions` to `desk=desk` for per-desk symbol/beta mutex isolation; added `RATCHET_PROFIT_LOCK` to 5m winner cooldown; added `S4` to `MAKER_STRATEGIES`; parked `S3`, `SH2`, `SH3` in `PARKED_STRATEGIES`.
+  4. `collectors/derivatives.py`: Added `recent_open_times` tracking, populated `recent_cvd_notionals` from `b[9]` during 300-bar REST warmup, and calibrated `compute_liquidation_intensity()` against a 60s cascade baseline (`max(100_000.0, median * 5.0)`).
+  5. `strategies/swing_momentum.py`, `strategies/superhuman_evaluator.py`, `strategies/evaluator.py`: Implemented UTC clock-aligned `resample_1m_to_15m()`, added `REJECT_FALLING_KNIFE_NO_BOUNCE` 1m reclaim/EMA-slope confirmation gate to `S4`/`SH4`, and parked `S3`/`SH2`/`SH3` in `evaluate_once()`.
+  6. `paper/trade_copilot.py`, `config/settings.py`, `api/server.py`: Synced Tier-1 ratchet telemetry to `+80/+35 bps` and persisted `COPILOT_EXECUTION_MODE` to `data/copilot_config.json`.
+  7. `ml/feature_store.py`, `ml/retraining_engine.py`: Added per-symbol `.groupby("symbol")` feature/label isolation, fixed `next_retrain_at_utc` overwrite bug, and implemented empirical PSI calculation from `crypto_candles_1m`.
+  8. `core/readiness.py`, `scripts/validate_gates.py`: Wired all 16 statistical promotion gates (`16/16`) and exempted Floating Time-Stop Profit Runners in Gate 15.
+- **Verification Suites:**
+  - `test_quant_invariants.py`: 6/6 PASSED (100%).
+  - `test_phase4_dispatcher.py`: 4/4 PASSED (100%).
+  - `test_phase5_control.py`: 3/3 PASSED (100%).
+  - `test_os_foundation.py`: 6/6 PASSED (100%).
+  - `test_crypto_copilot.py`: 6/6 PASSED (100%).
+  - `test_dual_desk_and_readiness.py`: 3/3 PASSED (100%).
+- **Deployment Status:** LOCAL CODE VERIFIED (100% tests passed). Awaiting explicit user instruction (`"you deploy"`) per `INV-OPS-001`.
 

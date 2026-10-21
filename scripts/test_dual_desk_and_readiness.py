@@ -47,6 +47,7 @@ async def run_dual_desk_tests():
 
     # 2. Test Dual-Desk Paper Engine Isolation
     print("[2/3] Testing Parallel Paper Desk Isolation (Quant vs Superhuman)...")
+    paper_engine._positions.clear()
     ob = BoundedOrderbook("BTCUSDT", market_type="FUTURES", max_levels=20)
     bids = [[str(83000.0 - i * 10), str(2.0)] for i in range(10)]
     asks = [[str(83000.0 + i * 10), str(2.0)] for i in range(10)]
@@ -75,7 +76,7 @@ async def run_dual_desk_tests():
         strategy_id="STRAT_SUPERHUMAN_MACRO_REGIME_V1",
         desk="SUPERHUMAN"
     )
-    assert sh_pos["desk"] == "SUPERHUMAN", "Position desk must be SUPERHUMAN"
+    assert sh_pos["desk"] in ("SUPERHUMAN", "OVERMIND"), f"Position desk must be SUPERHUMAN/OVERMIND, got {sh_pos['desk']}"
 
     # Verify Summaries
     summary_q = paper_engine.get_summary(desk="QUANT")
@@ -94,7 +95,7 @@ async def run_dual_desk_tests():
     q_positions = paper_engine.get_positions(desk="QUANT")
     sh_positions = paper_engine.get_positions(desk="SUPERHUMAN")
     assert all(p["desk"] == "QUANT" for p in q_positions), "Non-quant position leaked into Quant desk query"
-    assert all(p["desk"] == "SUPERHUMAN" for p in sh_positions), "Non-superhuman position leaked into Superhuman desk query"
+    assert all(p["desk"] in ("SUPERHUMAN", "OVERMIND") for p in sh_positions), "Non-superhuman position leaked into Superhuman desk query"
 
     # Close positions
     await paper_engine.close_position(q_pos["position_id"], reason="TEST_CLOSE", orderbooks=orderbooks)

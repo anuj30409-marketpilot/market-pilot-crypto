@@ -136,18 +136,25 @@ def simulate_fill(
 
 
 def get_ask_levels(orderbook) -> List[Tuple[float, float]]:
-    """Extract sorted ask levels from BoundedOrderbook (best ask first)."""
+    """Extract canonically sorted ask levels from BoundedOrderbook (best/lowest ask first)."""
     try:
-        snap = orderbook.asks  # SortedDict price→qty
-        return [(float(p), float(q)) for p, q in snap.items()]
+        snap = orderbook.asks
+        return sorted(
+            ((float(p), float(q)) for p, q in snap.items() if float(q) > 0.0),
+            key=lambda x: x[0],
+        )
     except Exception:
         return []
 
 
 def get_bid_levels(orderbook) -> List[Tuple[float, float]]:
-    """Extract sorted bid levels from BoundedOrderbook (best bid first = highest price first)."""
+    """Extract canonically sorted bid levels from BoundedOrderbook (best/highest bid first)."""
     try:
         snap = orderbook.bids
-        return [(float(p), float(q)) for p, q in reversed(snap.items())]
+        return sorted(
+            ((float(p), float(q)) for p, q in snap.items() if float(q) > 0.0),
+            key=lambda x: x[0],
+            reverse=True,
+        )
     except Exception:
         return []

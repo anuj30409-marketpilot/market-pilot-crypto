@@ -567,7 +567,8 @@ class PaperEngine:
                 logger.info(f"[PAPER RATCHET TIER-1] {pos.symbol} LONG SL raised to lock in +35bps profit @ {pos.stop_loss_price:.2f}")
 
             if pos.stop_loss_price and mark <= pos.stop_loss_price:
-                hit, reason, gap = True, "STOP_LOSS", True
+                is_profit_ratchet = pos.stop_loss_price > pos.entry_price
+                hit, reason, gap = True, ("RATCHET_PROFIT_LOCK" if is_profit_ratchet else "STOP_LOSS"), True
             elif pos.take_profit_price and mark >= pos.take_profit_price:
                 hit, reason, gap = True, "TAKE_PROFIT", False
         else:
@@ -592,7 +593,8 @@ class PaperEngine:
                 logger.info(f"[PAPER RATCHET TIER-1] {pos.symbol} SHORT SL lowered to lock in +35bps profit @ {pos.stop_loss_price:.2f}")
 
             if pos.stop_loss_price and mark >= pos.stop_loss_price:
-                hit, reason, gap = True, "STOP_LOSS", True
+                is_profit_ratchet = pos.stop_loss_price < pos.entry_price
+                hit, reason, gap = True, ("RATCHET_PROFIT_LOCK" if is_profit_ratchet else "STOP_LOSS"), True
             elif pos.take_profit_price and mark <= pos.take_profit_price:
                 hit, reason, gap = True, "TAKE_PROFIT", False
 

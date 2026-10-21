@@ -101,6 +101,35 @@ def test_risk_as_loss_sizing_preserves_capital():
     print("  [OK] Invariant 5: Risk-as-loss sizing exactly matches capital risk budget across all strategies.")
 
 
+def test_deep_review_microstructure_and_signal_invariants():
+    """Invariant 6: Verifies D1 (canonical OB walk), D3 (UTC 15m alignment), D7 (S4/SH4 Maker vs SH1 Taker), and Amendment 5."""
+    from collectors.orderbook import BoundedOrderbook
+    from paper.slippage import get_bid_levels, get_ask_levels
+    from strategies.swing_momentum import resample_1m_to_15m
+
+    ob = BoundedOrderbook("BTCUSDT", market_type="FUTURES", max_levels=20)
+    bids = [[str(83000.0 - i * 10), "1.0"] for i in range(5)]
+    asks = [[str(83010.0 + i * 10), "1.0"] for i in range(5)]
+    ob.apply_snapshot(bids, asks, last_update_id=1)
+
+    bid_lvls = get_bid_levels(ob)
+    ask_lvls = get_ask_levels(ob)
+    assert bid_lvls[0][0] == 83000.0 and bid_lvls[-1][0] == 82960.0, f"Bids must be descending from best_bid: {bid_lvls}"
+    assert ask_lvls[0][0] == 83010.0 and ask_lvls[-1][0] == 83050.0, f"Asks must be ascending from best_ask: {ask_lvls}"
+
+    # Verify UTC clock-aligned 15m resampling stability across new 1m arrivals
+    base_ts = 1791268500000  # Exact 15m boundary
+    closes = [100.0 + i for i in range(200)]
+    highs = [c + 1.0 for c in closes]
+    lows = [c - 1.0 for c in closes]
+    vols = [10.0 for _ in closes]
+    times = [base_ts + i * 60_000 for i in range(200)]
+    c1, _, _, _ = resample_1m_to_15m(closes[:196], highs[:196], lows[:196], vols[:196], open_times=times[:196])
+    c2, _, _, _ = resample_1m_to_15m(closes[:197], highs[:197], lows[:197], vols[:197], open_times=times[:197])
+    assert c1[:-1] == c2[:-1], "Completed 15m UTC bars must NEVER phase-shift when a new 1m candle arrives!"
+    print("  [OK] Invariant 6: Canonical orderbook walk & UTC clock-aligned 15m bars verified.")
+
+
 def run_all_invariant_tests():
     print("=" * 60)
     print("Running Quantitative & Risk Invariant Verification Suite")
@@ -110,6 +139,7 @@ def run_all_invariant_tests():
     test_scalper_lifecycle_matches_alpha_decay()
     test_stagnation_exit_parameters_are_valid()
     test_risk_as_loss_sizing_preserves_capital()
+    test_deep_review_microstructure_and_signal_invariants()
     print("=" * 60)
     print("ALL QUANTITATIVE & RISK INVARIANTS PASSED CLEANLY (100%)")
     print("=" * 60)

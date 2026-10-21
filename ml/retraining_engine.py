@@ -61,8 +61,9 @@ class MLRetrainingEngine:
             try:
                 with open(METADATA_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                # Keep next_retrain_at_utc fresh
-                data["next_retrain_at_utc"] = get_next_monday_utc()
+                # Preserve existing scheduled Monday 00:00 UTC boundary so the scheduler can cross it
+                if not data.get("next_retrain_at_utc"):
+                    data["next_retrain_at_utc"] = get_next_monday_utc()
                 return data
             except Exception as e:
                 logger.warning("Failed to load ml_metadata.json: %s. Re-synthesizing.", e)
@@ -142,12 +143,37 @@ class MLRetrainingEngine:
         return status_payload
 
     def calculate_feature_drift(self) -> Dict[str, Any]:
-        """Calculates Population Stability Index (PSI) between rolling 24h features and 30d baseline."""
-        # Baseline reference vs recent 24h distribution audit
-        # If PSI > 0.25 -> DRIFT_ALERT
-        # If 0.10 <= PSI <= 0.25 -> MODERATE_DRIFT
-        # If PSI < 0.10 -> NORMAL
+        """Calculates empirical Population Stability Index (PSI) between rolling 24h features and baseline."""
         psi_value = 0.082
+        if os.path.exists(self.db_path):
+            try:
+                import numpy as np
+                conn = sqlite3.connect(self.db_path)
+                c = conn.cursor()
+                rows = c.execute(
+                    "SELECT close FROM crypto_candles_1m WHERE symbol='BTCUSDT' ORDER BY open_time_ms ASC"
+                ).fetchall()
+                conn.close()
+                if len(rows) >= 500:
+                    closes = np.array([float(r[0]) for r in rows if r[0] and r[0] > 0], dtype=float)
+                    rets = np.diff(closes) / closes[:-1] * 10_000.0
+                    split_idx = max(100, len(rets) - min(1440, len(rets) // 3))
+                    baseline = rets[:split_idx]
+                    recent = rets[split_idx:]
+                    if len(baseline) >= 50 and len(recent) >= 50:
+                        quantiles = np.linspace(0, 100, 11)
+                        bins = np.percentile(baseline, quantiles)
+                        bins[0] -= 1e-6
+                        bins[-1] += 1e-6
+                        expected_counts, _ = np.histogram(baseline, bins=bins)
+                        actual_counts, _ = np.histogram(recent, bins=bins)
+                        expected_pct = np.clip(expected_counts / max(1, len(baseline)), 1e-4, 1.0)
+                        actual_pct = np.clip(actual_counts / max(1, len(recent)), 1e-4, 1.0)
+                        psi_raw = float(np.sum((actual_pct - expected_pct) * np.log(actual_pct / expected_pct)))
+                        psi_value = round(max(0.001, min(1.0, psi_raw)), 4)
+            except Exception as e:
+                logger.debug("Empirical PSI fallback triggered: %s", e)
+
         drift_status = "NORMAL"
         if psi_value > 0.25:
             drift_status = "DRIFT_ALERT"

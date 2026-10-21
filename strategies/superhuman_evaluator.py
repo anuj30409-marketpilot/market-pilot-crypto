@@ -265,13 +265,16 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
         rejections.append("REJECT_REGIME_UNFAVORABLE")
 
     # 2. Pull raw 1m lists
-    closes  = list(getattr(tracker, "recent_closes",  []) or [])
-    highs   = list(getattr(tracker, "recent_highs",   []) or [])
-    lows    = list(getattr(tracker, "recent_lows",    []) or [])
-    volumes = list(getattr(tracker, "recent_volumes", []) or [])
+    closes     = list(getattr(tracker, "recent_closes",     []) or [])
+    highs      = list(getattr(tracker, "recent_highs",      []) or [])
+    lows       = list(getattr(tracker, "recent_lows",       []) or [])
+    volumes    = list(getattr(tracker, "recent_volumes",    []) or [])
+    open_times = list(getattr(tracker, "recent_open_times", []) or [])
 
-    # Resample to 15m bars
-    c_15m, h_15m, l_15m, v_15m = resample_1m_to_15m(closes, highs, lows, volumes, bar_size=BAR_SIZE_MINUTES)
+    # Resample to 15m bars (UTC clock-aligned when open_times present)
+    c_15m, h_15m, l_15m, v_15m = resample_1m_to_15m(
+        closes, highs, lows, volumes, bar_size=BAR_SIZE_MINUTES, open_times=open_times
+    )
 
     if len(c_15m) < MIN_15M_BARS:
         rejections.append("REJECT_INSUFFICIENT_DATA")
@@ -281,11 +284,13 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
         expected_edge_bps = 0.0
     else:
         ema_fast = _ema(c_15m, EMA_FAST_15M)
+        ema_fast_prev = _ema(c_15m[:-1], EMA_FAST_15M) if len(c_15m) > EMA_FAST_15M else ema_fast
         ema_slow = _ema(c_15m, EMA_SLOW_15M)
         adx_val  = _adx(h_15m, l_15m, c_15m, ADX_PERIOD_15M)
         atr_15m_bps = _atr_bps(h_15m, l_15m, c_15m, period=8)
 
         current_close = closes[-1] if closes else ob.mid_price
+        prev_close = closes[-2] if len(closes) >= 2 else current_close
         recent_15m_lows = lows[-30:] if len(lows) >= 30 else lows
         recent_15m_highs = highs[-30:] if len(highs) >= 30 else highs
 
@@ -303,8 +308,22 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
         rejecting_short = (ema_fast is not None and ema_fast * (1.0 - MAX_PULLBACK_EXTENSION_PCT) <= current_close <= ema_fast * 1.0005)
         short_setup = trend_bear and pullback_tested_short and rejecting_short
 
+        # Falling-Knife / Reclaim Bounce & EMA Slope Confirmation Gate (D2 Fix)
+        bounce_long_ok = (
+            current_close >= prev_close
+            and (ema_fast_prev is None or ema_fast >= ema_fast_prev * 0.9998)
+        )
+        bounce_short_ok = (
+            current_close <= prev_close
+            and (ema_fast_prev is None or ema_fast <= ema_fast_prev * 1.0002)
+        )
+        bounce_ok = bounce_long_ok if long_setup else (bounce_short_ok if short_setup else False)
+
         if not (long_setup or short_setup):
             rejections.append("REJECT_SIGNAL_THRESHOLD_NOT_MET")
+            direction = None
+        elif not bounce_ok:
+            rejections.append("REJECT_FALLING_KNIFE_NO_BOUNCE")
             direction = None
         elif not adx_ok:
             rejections.append("REJECT_LOW_ADX_STRENGTH")
@@ -481,10 +500,61 @@ class SuperhumanEvaluator:
 
             tracker = derivatives_engine.trackers.get(upper)
 
+            now_ms = now_utc_ms()
             c1 = evaluate_superhuman_macro_regime(deriv, ob, tracker=tracker)
-            # SH2 (CROSS_VENUE) Unparked — Delta India live feed now wired in execution/parity.py
-            c2 = evaluate_superhuman_cross_venue(deriv, ob)
-            c3 = evaluate_superhuman_vol_expansion(deriv, ob)
+            # SH2 (CROSS_VENUE) and SH3 (VOLATILITY_EXPANSION) are PARKED per D6 / Amendment 4
+            c2 = CandidateRecord(
+                candidate_id=f"CAND-SH2-{upper}-{now_ms}",
+                timestamp_ms=now_ms,
+                symbol=upper,
+                origin="SUPERHUMAN",
+                engine_version="v2.0-SH2-PARKED",
+                model_version="deepseek-r1-cross-venue",
+                signal_version="v2.0",
+                decision="REJECT",
+                decision_reason="Strategy SH2 (Cross-Venue Dislocation) is PARKED pending dedicated latency-arbitrage feed.",
+                hypothetical_entry=ob.mid_price,
+                strategy_id=SH2_ID,
+                strategy_version="1.0.0",
+                feature_version="1.0",
+                parameter_version="1.0",
+                signal_score=0.0,
+                expected_edge_bps=0.0,
+                estimated_cost_bps=ob.spread_bps + 8.0,
+                expected_net_edge_bps=-8.0,
+                regime=deriv.regime,
+                rejection_codes=["REJECT_STRATEGY_PARKED"],
+                conversion_rate_applied=currency_service.get_rate("MARKET"),
+                research_venue="BINANCE",
+                execution_venue="DELTA_INDIA",
+                created_at_iso=ms_to_iso(now_ms),
+            )
+            c3 = CandidateRecord(
+                candidate_id=f"CAND-SH3-{upper}-{now_ms}",
+                timestamp_ms=now_ms,
+                symbol=upper,
+                origin="SUPERHUMAN",
+                engine_version="v2.0-SH3-PARKED",
+                model_version="deepseek-r1-vol-expansion",
+                signal_version="v2.0",
+                decision="REJECT",
+                decision_reason="Strategy SH3 (Volatility Compression Breakout) is PARKED pending multi-timeframe volatility squeeze model.",
+                hypothetical_entry=ob.mid_price,
+                strategy_id=SH3_ID,
+                strategy_version="1.0.0",
+                feature_version="1.0",
+                parameter_version="1.0",
+                signal_score=0.0,
+                expected_edge_bps=0.0,
+                estimated_cost_bps=ob.spread_bps + 8.0,
+                expected_net_edge_bps=-8.0,
+                regime=deriv.regime,
+                rejection_codes=["REJECT_STRATEGY_PARKED"],
+                conversion_rate_applied=currency_service.get_rate("MARKET"),
+                research_venue="BINANCE",
+                execution_venue="DELTA_INDIA",
+                created_at_iso=ms_to_iso(now_ms),
+            )
             c4 = evaluate_superhuman_swing(deriv, ob, tracker)
 
             for cand in [c1, c2, c3, c4]:

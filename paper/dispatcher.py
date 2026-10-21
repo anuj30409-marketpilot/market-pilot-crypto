@@ -202,8 +202,8 @@ class PortfolioRiskController:
                 cooldown_ms = 30 * 60 * 1000  # 30 mins for dead chop / stagnation
             elif exit_reason == "STOP_LOSS":
                 cooldown_ms = 20 * 60 * 1000  # 20 mins for adverse volatility
-            elif exit_reason == "TAKE_PROFIT":
-                cooldown_ms = 5 * 60 * 1000   # 5 mins for active runner
+            elif exit_reason in ("TAKE_PROFIT", "RATCHET_PROFIT_LOCK"):
+                cooldown_ms = 5 * 60 * 1000   # 5 mins for active runner / profit harvest
             else:
                 cooldown_ms = 15 * 60 * 1000  # 15 mins default
 
@@ -299,9 +299,15 @@ class PaperDispatcher:
             )
             return {"status": "REJECTED", "reason": f"INSUFFICIENT_NET_EDGE_{cand_net_edge:.1f}BPS_LT_5BPS"}
 
-        # Gate: Parked Strategies Quarantine (Part 1 Institutional Restructuring)
-        # S1 and S2 are parked to eliminate negative-expectancy taker fee bleed.
-        PARKED_STRATEGIES = {"STRAT_ORDERBOOK_MOMENTUM_V1", "STRAT_FUNDING_REVERSION_V1"}
+        # Gate: Parked Strategies Quarantine (Institutional Restructuring & Auditor Amendment 4)
+        # S1, S2, S3, SH2, and SH3 are parked to focus 100% of capital on proven swing/macro impulse alpha (SH1, SH4, S4).
+        PARKED_STRATEGIES = {
+            "STRAT_ORDERBOOK_MOMENTUM_V1",
+            "STRAT_FUNDING_REVERSION_V1",
+            "STRAT_LIQUIDATION_FADER_V1",
+            "STRAT_SUPERHUMAN_CROSS_VENUE_V1",
+            "STRAT_SUPERHUMAN_VOLATILITY_EXPANSION_V1",
+        }
         if candidate.strategy_id in PARKED_STRATEGIES and not candidate.candidate_id.startswith("TEST-DISPATCH"):
             logger.info("Paper dispatcher rejected %s: strategy %s is PARKED", candidate.candidate_id, candidate.strategy_id)
             return {"status": "REJECTED", "reason": f"STRATEGY_PARKED_{candidate.strategy_id}"}
@@ -313,11 +319,11 @@ class PaperDispatcher:
         # Determine desk: QUANT or OVERMIND
         desk = normalize_desk(getattr(candidate, "origin", "QUANT"))
 
-        # 1. Fetch current portfolio state
+        # 1. Fetch current portfolio state (Strict Per-Desk Isolation per AGENTS.md Operating Rule 3)
         summary = paper_engine.get_summary(desk=desk)
         account_equity = summary["capital_usdt"] + summary["net_pnl"]
-        # Query open positions across ALL desks for global concurrency & collision protection
-        global_open_positions = sqlite_store.get_paper_positions(status="OPEN", desk="ALL")
+        # Query open positions scoped to this desk so OVERMIND and QUANT maintain independent $10,000 books
+        desk_open_positions = sqlite_store.get_paper_positions(status="OPEN", desk=desk)
         closed_positions = sqlite_store.get_paper_positions(status="CLOSED", desk=desk, limit=50)
 
         # 2. Get live orderbook
@@ -339,12 +345,12 @@ class PaperDispatcher:
 
         direction = self.infer_direction(candidate)
 
-        # 4. Check Portfolio-level Risk Limits (Global Cross-Desk Check)
+        # 4. Check Portfolio-level Risk Limits (Isolated Per-Desk Check)
         allowed, risk_reason = self.risk_controller.check_portfolio_limits(
             symbol=symbol,
             direction=direction,
             candidate_notional=notional_usdt,
-            open_positions=global_open_positions,
+            open_positions=desk_open_positions,
             closed_positions=closed_positions,
             account_equity=account_equity,
             now_ms=now_ms,
@@ -371,11 +377,13 @@ class PaperDispatcher:
             candidate.candidate_id, strat_id, symbol, direction, desk, notional_usdt, risk_loss_usd, DEFAULT_RISK_PER_TRADE_PCT
         )
 
-        # Strategy execution style:
-        # S1 (Funding Carry), SH4 (Overmind Swing), and S2 (Orderbook Scalper) use passive MAKER limits (cuts entry fee by 50%)
+        # Strategy execution style (Auditor Amendment 3):
+        # Pullback/carry strategies (S4, SH4, S1, S2) use passive MAKER limits (cuts entry fee by 50% to 2.0 bps).
+        # SH1 (1.60 sigma directional CVD impulse breakout) remains TAKER to avoid missed fills / adverse selection.
         MAKER_STRATEGIES = {
             "STRAT_FUNDING_REVERSION_V1",
             "STRAT_SUPERHUMAN_SWING_V1",
+            "STRAT_SWING_MOMENTUM_V1",
             "STRAT_ORDERBOOK_MOMENTUM_V1",
         }
         order_type = "MAKER" if strat_id in MAKER_STRATEGIES else "TAKER"

@@ -124,12 +124,10 @@ print(json.dumps({{'candles': candles[::-1], 'derivs': derivs[::-1]}}))
         deriv_df = pd.DataFrame(data["derivs"], columns=d_cols)
         return candles_df, deriv_df
 
-    def extract_features(
-        self, candles_df: pd.DataFrame, deriv_df: Optional[pd.DataFrame] = None
+    def _extract_single_symbol_features(
+        self, df: pd.DataFrame, ddf: Optional[pd.DataFrame] = None
     ) -> pd.DataFrame:
-        """Extracts first- and second-order microstructural features."""
-        df = candles_df.copy()
-        df["timestamp"] = pd.to_datetime(df["timestamp_ms"], unit="ms", utc=True)
+        """Extracts first- and second-order microstructural features for a single symbol."""
         df = df.sort_values("timestamp_ms").reset_index(drop=True)
 
         # 1. Price Returns & Multi-Horizon Volatility
@@ -150,11 +148,8 @@ print(json.dumps({{'candles': candles[::-1], 'derivs': derivs[::-1]}}))
         df["taker_buy_ratio"] = df["taker_buy_base_volume"] / df["volume"].replace(0, 1.0)
 
         # 4. Integrate Derivatives State (CVD, Funding, Basis)
-        if deriv_df is not None and not deriv_df.empty:
-            ddf = deriv_df.copy()
-            ddf["timestamp"] = pd.to_datetime(ddf["timestamp_ms"], unit="ms", utc=True)
+        if ddf is not None and not ddf.empty:
             ddf = ddf.sort_values("timestamp_ms").reset_index(drop=True)
-
             merged = pd.merge_asof(
                 df,
                 ddf,
@@ -194,20 +189,42 @@ print(json.dumps({{'candles': candles[::-1], 'derivs': derivs[::-1]}}))
             df["basis_velocity_1m"] = 0.0
             df["funding_zscore"] = 0.0
 
-        # Fill NAs caused by rolling windows
-        df = df.bfill().ffill()
-        return df
+        return df.bfill().ffill()
 
-    def apply_triple_barrier_labels(
+    def extract_features(
+        self, candles_df: pd.DataFrame, deriv_df: Optional[pd.DataFrame] = None
+    ) -> pd.DataFrame:
+        """Extracts first- and second-order microstructural features partitioned per symbol."""
+        df = candles_df.copy()
+        df["timestamp"] = pd.to_datetime(df["timestamp_ms"], unit="ms", utc=True)
+
+        if "symbol" in df.columns and df["symbol"].nunique() > 1:
+            parts = []
+            for sym, sym_df in df.groupby("symbol", sort=False):
+                sym_ddf = None
+                if deriv_df is not None and not deriv_df.empty and "symbol" in deriv_df.columns:
+                    sym_ddf = deriv_df[deriv_df["symbol"] == sym].copy()
+                    if not sym_ddf.empty:
+                        sym_ddf["timestamp"] = pd.to_datetime(sym_ddf["timestamp_ms"], unit="ms", utc=True)
+                parts.append(self._extract_single_symbol_features(sym_df.copy(), sym_ddf))
+            combined = pd.concat(parts, ignore_index=True)
+            return combined.sort_values("timestamp_ms").reset_index(drop=True)
+
+        ddf = None
+        if deriv_df is not None and not deriv_df.empty:
+            ddf = deriv_df.copy()
+            ddf["timestamp"] = pd.to_datetime(ddf["timestamp_ms"], unit="ms", utc=True)
+        return self._extract_single_symbol_features(df, ddf)
+
+    def _label_single_symbol(
         self,
         df: pd.DataFrame,
-        horizon_bars: int = 5,
-        tp_bps: float = 22.0,
-        sl_bps: float = 18.0,
-        friction_bps: float = ROUNDTRIP_MAKER_TAKER_FRICTION_BPS,
+        horizon_bars: int,
+        tp_bps: float,
+        sl_bps: float,
+        friction_bps: float,
     ) -> pd.DataFrame:
-        """Labels each bar using Triple Barrier Method net of roundtrip friction."""
-        df = df.copy()
+        df = df.sort_values("timestamp_ms").reset_index(drop=True)
         n = len(df)
         labels = np.zeros(n, dtype=int)
         realized_edges_bps = np.zeros(n, dtype=float)
@@ -216,7 +233,7 @@ print(json.dumps({{'candles': candles[::-1], 'derivs': derivs[::-1]}}))
         high_prices = df["high"].values
         low_prices = df["low"].values
 
-        for i in range(n - horizon_bars):
+        for i in range(max(0, n - horizon_bars)):
             entry_p = close_prices[i]
             if entry_p <= 0:
                 continue
@@ -251,6 +268,25 @@ print(json.dumps({{'candles': candles[::-1], 'derivs': derivs[::-1]}}))
         df["meta_label"] = labels
         df["net_edge_bps"] = realized_edges_bps
         return df
+
+    def apply_triple_barrier_labels(
+        self,
+        df: pd.DataFrame,
+        horizon_bars: int = 5,
+        tp_bps: float = 22.0,
+        sl_bps: float = 18.0,
+        friction_bps: float = ROUNDTRIP_MAKER_TAKER_FRICTION_BPS,
+    ) -> pd.DataFrame:
+        """Labels each bar using Triple Barrier Method net of roundtrip friction per symbol."""
+        df = df.copy()
+        if "symbol" in df.columns and df["symbol"].nunique() > 1:
+            parts = [
+                self._label_single_symbol(sym_df.copy(), horizon_bars, tp_bps, sl_bps, friction_bps)
+                for _, sym_df in df.groupby("symbol", sort=False)
+            ]
+            combined = pd.concat(parts, ignore_index=True)
+            return combined.sort_values("timestamp_ms").reset_index(drop=True)
+        return self._label_single_symbol(df, horizon_bars, tp_bps, sl_bps, friction_bps)
 
 
 class PurgedKFold:

@@ -182,7 +182,32 @@ class StrategyEvaluator:
                 execution_venue="DELTA_INDIA",
                 created_at_iso=ms_to_iso(now_ms),
             )
-            cand3 = evaluate_liquidation_fader(deriv, ob)
+            cand3 = CandidateRecord(
+                candidate_id=f"CAND-S3-{upper}-{now_ms}",
+                timestamp_ms=now_ms,
+                symbol=upper,
+                origin="QUANT",
+                engine_version="v2.0-S3-PARKED",
+                model_version="liquidation-exhaustion-v1",
+                signal_version="v2.0",
+                decision="REJECT",
+                decision_reason="Strategy S3 (Liquidation Fader) is PARKED per D6 / Amendment 4.",
+                hypothetical_entry=ob.mid_price,
+                strategy_id="STRAT_LIQUIDATION_FADER_V1",
+                strategy_version="1.0.0",
+                feature_version="1.0",
+                parameter_version="1.0",
+                signal_score=0.0,
+                expected_edge_bps=0.0,
+                estimated_cost_bps=ob.spread_bps + 8.0,
+                expected_net_edge_bps=-8.0,
+                regime=deriv.regime,
+                rejection_codes=["REJECT_STRATEGY_PARKED"],
+                conversion_rate_applied=currency_service.get_rate("MARKET"),
+                research_venue="BINANCE",
+                execution_venue="DELTA_INDIA",
+                created_at_iso=ms_to_iso(now_ms),
+            )
             cand4 = evaluate_swing_momentum(deriv, ob, tracker)
 
             for cand in [cand1, cand2, cand3, cand4]:

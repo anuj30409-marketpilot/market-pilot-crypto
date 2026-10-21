@@ -47,6 +47,7 @@ class SymbolDerivativesTracker:
         self.recent_highs: List[float] = []
         self.recent_lows: List[float] = []
         self.recent_volumes: List[float] = []
+        self.recent_open_times: List[int] = []
 
     def update_open_interest(self, oi: float, now_ms: int):
         if self.open_interest > 0:
@@ -106,6 +107,7 @@ class SymbolDerivativesTracker:
             self.recent_highs.append(c.high)
             self.recent_lows.append(c.low)
             self.recent_volumes.append(c.volume)
+            self.recent_open_times.append(c.open_time_ms)
         else:
             # Update the in-progress 1m candle bar
             if self.recent_cvd_notionals:
@@ -114,6 +116,10 @@ class SymbolDerivativesTracker:
             self.recent_highs[-1] = max(self.recent_highs[-1], c.high)
             self.recent_lows[-1] = min(self.recent_lows[-1], c.low)
             self.recent_volumes[-1] = c.volume
+            if self.recent_open_times:
+                self.recent_open_times[-1] = c.open_time_ms
+            else:
+                self.recent_open_times.append(c.open_time_ms)
 
         if len(self.recent_cvd_notionals) > 60:
             self.recent_cvd_notionals.pop(0)
@@ -122,6 +128,8 @@ class SymbolDerivativesTracker:
             self.recent_highs.pop(0)
             self.recent_lows.pop(0)
             self.recent_volumes.pop(0)
+            if self.recent_open_times:
+                self.recent_open_times.pop(0)
 
     def record_liquidation(self, notional_usd: float, timestamp_ms: Optional[int] = None):
         ts = timestamp_ms or now_utc_ms()
@@ -163,13 +171,16 @@ class SymbolDerivativesTracker:
         return 0.0
 
     def compute_liquidation_intensity(self) -> float:
-        if not self.recent_liquidation_notionals:
+        if self.liquidation_notional_60s <= 0.0:
             return 1.0
+        if not self.recent_liquidation_notionals:
+            return max(1.0, self.liquidation_notional_60s / 100_000.0)
         sorted_liq = sorted(self.recent_liquidation_notionals)
         median = sorted_liq[len(sorted_liq) // 2]
-        if median > 1000.0:
-            return self.liquidation_notional_60s / median
-        return 1.0
+        # Compare 60s cumulative liquidation notional against a 60s cascade baseline
+        # (max of $100k or 5x single-order median) rather than raw single-order median
+        baseline_60s = max(100_000.0, median * 5.0)
+        return max(1.0, self.liquidation_notional_60s / baseline_60s)
 
     def get_state(self, quarantine_state: str = "NORMAL") -> Optional[DerivativesState]:
         if self.mark_price == 0.0:
@@ -288,17 +299,27 @@ class DerivativesEngine:
                     tracker = self.trackers.get(symbol.upper())
                     if tracker and bars:
                         for b in bars:
+                            open_time = int(b[0])
                             h = float(b[2])
                             l = float(b[3])
                             c = float(b[4])
                             v = float(b[5])
+                            taker_buy = float(b[9]) if len(b) > 9 else (v * 0.5)
+                            taker_sell = max(0.0, v - taker_buy)
+                            cvd_1m = taker_buy - taker_sell
                             tracker.recent_closes.append(c)
                             tracker.recent_highs.append(h)
                             tracker.recent_lows.append(l)
                             tracker.recent_volumes.append(v)
+                            tracker.recent_open_times.append(open_time)
+                            tracker.recent_cvd_notionals.append(cvd_1m * c)
+                        if len(tracker.recent_cvd_notionals) > 60:
+                            tracker.recent_cvd_notionals = tracker.recent_cvd_notionals[-60:]
                         tracker.last_candle_time_ms = int(bars[-1][0])
                         tracker.mark_price = float(bars[-1][4])
-                        logger.info(f"Warmed up {len(bars)} 1m historical candles for {symbol}")
+                        if tracker.recent_cvd_notionals:
+                            tracker.cvd_notional_usd_1m = tracker.recent_cvd_notionals[-1]
+                        logger.info(f"Warmed up {len(bars)} 1m historical candles (incl. CVD & UTC timestamps) for {symbol}")
         except Exception as e:
             logger.warning(f"Failed to warmup historical candles for {symbol}: {e}")
 

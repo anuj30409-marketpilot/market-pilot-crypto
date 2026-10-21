@@ -50,12 +50,52 @@ REJECTED_REGIMES = {"RANGE", "LOW_VOLATILITY", "FUNDING_EXTREME", "LIQUIDATION_E
 
 def resample_1m_to_15m(
     closes: List[float], highs: List[float], lows: List[float], volumes: List[float],
-    bar_size: int = 15
+    bar_size: int = 15,
+    open_times: Optional[List[int]] = None,
 ) -> Tuple[List[float], List[float], List[float], List[float]]:
-    """Resamples 1-minute arrays into aggregated bar_size (15m) OHLCV series."""
+    """Resamples 1-minute arrays into aggregated bar_size (15m) OHLCV series.
+
+    When open_times (UTC epoch ms) are provided, groups 1m bars by canonical
+    UTC clock boundaries (:00, :15, :30, :45) so historical 15m bars never
+    phase-shift as new 1m bars arrive. Falls back to modulo indexing when
+    timestamps are unavailable.
+    """
     n = len(closes)
     if n < bar_size:
         return [], [], [], []
+
+    if open_times and len(open_times) == n and open_times[0] > 0:
+        bucket_ms = bar_size * 60_000
+        buckets = []
+        cur_bucket_id = None
+        cur_c, cur_h, cur_l, cur_v = [], [], [], []
+        for idx in range(n):
+            b_id = open_times[idx] // bucket_ms
+            if cur_bucket_id is None or b_id != cur_bucket_id:
+                if cur_c:
+                    buckets.append((cur_c, cur_h, cur_l, cur_v))
+                cur_bucket_id = b_id
+                cur_c = [closes[idx]]
+                cur_h = [highs[idx]]
+                cur_l = [lows[idx]]
+                cur_v = [volumes[idx]]
+            else:
+                cur_c.append(closes[idx])
+                cur_h.append(highs[idx])
+                cur_l.append(lows[idx])
+                cur_v.append(volumes[idx])
+        if cur_c:
+            buckets.append((cur_c, cur_h, cur_l, cur_v))
+
+        # Drop leading partial fragment if we have sufficient full buckets
+        if len(buckets) > MIN_15M_BARS and len(buckets[0][0]) < bar_size:
+            buckets = buckets[1:]
+
+        c_15m = [b[0][-1] for b in buckets]
+        h_15m = [max(b[1]) for b in buckets]
+        l_15m = [min(b[2]) for b in buckets]
+        v_15m = [sum(b[3]) for b in buckets]
+        return c_15m, h_15m, l_15m, v_15m
 
     remainder = n % bar_size
     start_idx = remainder  # Align to full complete historical buckets
@@ -180,13 +220,16 @@ def evaluate_swing_momentum(
         rejection_codes.append("REJECT_DATA_STALE")
 
     # 3. Pull raw 1m price lists from tracker
-    closes  = list(getattr(tracker, "recent_closes",  []) or [])
-    highs   = list(getattr(tracker, "recent_highs",   []) or [])
-    lows    = list(getattr(tracker, "recent_lows",    []) or [])
-    volumes = list(getattr(tracker, "recent_volumes", []) or [])
+    closes     = list(getattr(tracker, "recent_closes",     []) or [])
+    highs      = list(getattr(tracker, "recent_highs",      []) or [])
+    lows       = list(getattr(tracker, "recent_lows",       []) or [])
+    volumes    = list(getattr(tracker, "recent_volumes",    []) or [])
+    open_times = list(getattr(tracker, "recent_open_times", []) or [])
 
-    # Resample to 15m bars
-    c_15m, h_15m, l_15m, v_15m = resample_1m_to_15m(closes, highs, lows, volumes, bar_size=BAR_SIZE_MINUTES)
+    # Resample to 15m bars (UTC clock-aligned when open_times present)
+    c_15m, h_15m, l_15m, v_15m = resample_1m_to_15m(
+        closes, highs, lows, volumes, bar_size=BAR_SIZE_MINUTES, open_times=open_times
+    )
 
     if len(c_15m) < MIN_15M_BARS:
         rejection_codes.append("REJECT_INSUFFICIENT_DATA")
@@ -195,11 +238,13 @@ def evaluate_swing_momentum(
     else:
         # 4. Compute 15m Multi-Timeframe Trend Filters
         ema_fast = _ema(c_15m, EMA_FAST_15M)
+        ema_fast_prev = _ema(c_15m[:-1], EMA_FAST_15M) if len(c_15m) > EMA_FAST_15M else ema_fast
         ema_slow = _ema(c_15m, EMA_SLOW_15M)
         adx_val  = _adx(h_15m, l_15m, c_15m, ADX_PERIOD_15M)
         atr_15m_bps = _atr_bps(h_15m, l_15m, c_15m, period=8)
 
         current_close = closes[-1] if closes else ob.mid_price
+        prev_close = closes[-2] if len(closes) >= 2 else current_close
         recent_15m_lows = lows[-30:] if len(lows) >= 30 else lows
         recent_15m_highs = highs[-30:] if len(highs) >= 30 else highs
 
@@ -218,6 +263,17 @@ def evaluate_swing_momentum(
         rejecting_short = (ema_fast is not None and ema_fast * (1.0 - MAX_PULLBACK_EXTENSION_PCT) <= current_close <= ema_fast * 1.0005)
         short_setup = trend_bear and pullback_tested_short and rejecting_short
 
+        # 5a. Falling-Knife / Reclaim Bounce & EMA Slope Confirmation Gate (D2 Fix)
+        bounce_long_ok = (
+            current_close >= prev_close
+            and (ema_fast_prev is None or ema_fast >= ema_fast_prev * 0.9998)
+        )
+        bounce_short_ok = (
+            current_close <= prev_close
+            and (ema_fast_prev is None or ema_fast <= ema_fast_prev * 1.0002)
+        )
+        bounce_ok = bounce_long_ok if long_setup else (bounce_short_ok if short_setup else False)
+
         # CVD flow & Orderbook confirmation (>= 0.25σ absorption)
         cvd_z = getattr(deriv, "cvd_notional_usd_zscore", 0.0)
         cvd_ok = (cvd_z >= 0.25) if long_setup else ((cvd_z <= -0.25) if short_setup else False)
@@ -225,13 +281,15 @@ def evaluate_swing_momentum(
 
         direction = None
         if long_setup or short_setup:
+            if not bounce_ok:
+                rejection_codes.append("REJECT_FALLING_KNIFE_NO_BOUNCE")
             if not adx_ok:
                 rejection_codes.append("REJECT_LOW_ADX_STRENGTH")
             if not cvd_ok:
                 rejection_codes.append("REJECT_CVD_DIRECTION_MISMATCH")
             if not book_ok:
                 rejection_codes.append("REJECT_COUNTER_TREND_BOOK_TRAP")
-            if adx_ok and cvd_ok and book_ok:
+            if bounce_ok and adx_ok and cvd_ok and book_ok:
                 direction = "LONG" if long_setup else "SHORT"
         else:
             rejection_codes.append("REJECT_SIGNAL_THRESHOLD_NOT_MET")
