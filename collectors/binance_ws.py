@@ -62,7 +62,13 @@ class BinanceStreamCollector:
         stream_path = "/".join(streams)
         return f"{settings.BINANCE_FUTURES_WS}/stream?streams={stream_path}"
 
-    async def _handle_message(self, raw_bytes: bytes):
+    def _build_spot_stream_url(self) -> str:
+        """Constructs multiplex stream URL for configured spot symbols (1m klines for Spot CVD)."""
+        streams = [f"{sym.lower()}@kline_1m" for sym in settings.SYMBOLS_SPOT]
+        stream_path = "/".join(streams)
+        return f"{settings.BINANCE_SPOT_WS}/stream?streams={stream_path}"
+
+    async def _handle_message(self, raw_bytes: bytes, is_spot: bool = False):
         try:
             received_ms = now_utc_ms()
             data = orjson.loads(raw_bytes)
@@ -79,9 +85,10 @@ class BinanceStreamCollector:
                 symbol = (payload.get("s") or k.get("s") or (stream_name.split("@")[0] if "@" in stream_name else "")).upper()
                 event_time_ms = payload.get("E", received_ms)
                 
+                market_type = "SPOT" if is_spot else "FUTURES"
                 candle = Candle1m(
                     symbol=symbol,
-                    market_type="FUTURES",
+                    market_type=market_type,
                     open_time_ms=k.get("t"),
                     close_time_ms=k.get("T"),
                     open=float(k.get("o")),
@@ -100,13 +107,16 @@ class BinanceStreamCollector:
                 # Store completed candles or update latest bar in SQLite
                 sqlite_store.upsert_candle(candle)
                 
-                # Update derivatives flow (CVD, taker buy ratio, snapshot on close)
-                feed_state_val = self.feed_statuses[symbol].state.value if symbol in self.feed_statuses else "NORMAL"
-                derivatives_engine.handle_candle_update(candle, feed_state_val)
+                if is_spot:
+                    derivatives_engine.handle_spot_candle_update(candle)
+                else:
+                    # Update derivatives flow (CVD, taker buy ratio, snapshot on close)
+                    feed_state_val = self.feed_statuses[symbol].state.value if symbol in self.feed_statuses else "NORMAL"
+                    derivatives_engine.handle_candle_update(candle, feed_state_val)
 
-                if symbol in self.feed_statuses:
-                    self.feed_statuses[symbol].mark_event(event_time_ms, received_ms)
-                    sqlite_store.update_feed_status(self.feed_statuses[symbol])
+                    if symbol in self.feed_statuses:
+                        self.feed_statuses[symbol].mark_event(event_time_ms, received_ms)
+                        sqlite_store.update_feed_status(self.feed_statuses[symbol])
 
             # 2. Aggregated Trade stream
             elif "@aggtrade" in stream_lower:
@@ -183,12 +193,9 @@ class BinanceStreamCollector:
                     self.trade_batch.clear()
                     await asyncio.get_running_loop().run_in_executor(None, parquet_store.write_agg_trades_batch, batch_to_write)
 
-    async def run(self):
-        self.running = True
-        flush_task = asyncio.create_task(self._flush_periodically())
+    async def _run_futures_stream(self):
         url = self._build_futures_stream_url()
-        logger.info(f"Connecting to Binance stream: {url}")
-
+        logger.info(f"Connecting to Binance Futures stream: {url}")
         while self.running:
             try:
                 # Proactive rotation: close connection after 23 hours to prevent exchange force kill
@@ -198,15 +205,45 @@ class BinanceStreamCollector:
                     ping_timeout=10,
                     max_size=10 * 1024 * 1024
                 ) as ws:
-                    logger.info("Connected to Binance WebSocket stream.")
+                    logger.info("Connected to Binance Futures WebSocket stream.")
                     while self.running:
                         msg = await ws.recv()
-                        await self._handle_message(msg)
+                        await self._handle_message(msg, is_spot=False)
             except Exception as e:
-                logger.error(f"WebSocket error: {e}. Reconnecting in 5 seconds...")
-                await asyncio.sleep(5)
+                if self.running:
+                    logger.error(f"Futures WebSocket error: {e}. Reconnecting in 5 seconds...")
+                    await asyncio.sleep(5)
 
-        flush_task.cancel()
+    async def _run_spot_stream(self):
+        url = self._build_spot_stream_url()
+        logger.info(f"Connecting to Binance Spot stream: {url}")
+        while self.running:
+            try:
+                async with websockets.connect(
+                    url,
+                    ping_interval=settings.WS_HEARTBEAT_SECONDS,
+                    ping_timeout=10,
+                    max_size=5 * 1024 * 1024
+                ) as ws:
+                    logger.info("Connected to Binance Spot WebSocket stream.")
+                    while self.running:
+                        msg = await ws.recv()
+                        await self._handle_message(msg, is_spot=True)
+            except Exception as e:
+                if self.running:
+                    logger.error(f"Spot WebSocket error: {e}. Reconnecting in 5 seconds...")
+                    await asyncio.sleep(5)
+
+    async def run(self):
+        self.running = True
+        flush_task = asyncio.create_task(self._flush_periodically())
+        try:
+            await asyncio.gather(
+                self._run_futures_stream(),
+                self._run_spot_stream(),
+            )
+        finally:
+            flush_task.cancel()
 
 collector = BinanceStreamCollector()
 

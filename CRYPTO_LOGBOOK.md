@@ -486,5 +486,29 @@
   - `test_os_foundation.py`: 6/6 PASSED (100%).
   - `test_crypto_copilot.py`: 6/6 PASSED (100%).
   - `test_dual_desk_and_readiness.py`: 3/3 PASSED (100%).
-- **Deployment Status:** DEPLOYED TO ORACLE VM 2 (Commit f48b765, PID 206390). All 6 verification suites passed cleanly on VM 2 (100%), systemd service active, live endpoints operational.
+- **Deployment Status:** DEPLOYED TO ORACLE VM 2 (Commit 183a192, PID 206390). All 6 verification suites passed cleanly on VM 2 (100%), systemd service active, live endpoints operational.
+
+### 2026-10-21: Phase 4 R&D — Spot-Perp CVD Divergence Engine & Leverage Trap Filters (Approved by User)
+- **Problem & Context:**
+  1. User approved Option 2: Spot vs. Perpetual CVD Divergence to expand institutional market microstructure signals.
+  2. Perpetual CVD alone is vulnerable to retail leverage traps (perpetual chasing unsupported by spot, which collapses into long liquidation flushes) and can miss explosive short squeezes triggered when spot whales accumulate collateral into perpetual short selling.
+- **Architectural Solution & Calibration:**
+  1. *Binance Spot Multiplex Stream Ingestion (`collectors/binance_ws.py`):* Added `_run_spot_stream()` connecting to `settings.BINANCE_SPOT_WS` (`wss://stream.binance.com:9443/stream?streams=btcusdt@kline_1m/ethusdt@kline_1m`), consuming 1m spot klines and routing to `derivatives_engine.handle_spot_candle_update(candle)`.
+  2. *Spot CVD & Divergence State (`collectors/derivatives.py`):*
+     - `SymbolDerivativesTracker` maintains rolling 60-minute `recent_spot_cvds` and calculates `compute_spot_cvd_zscore()`.
+     - Calculates normalized `spot_perp_divergence_z = spot_cvd_z - perp_cvd_z`.
+     - In `warmup_historical_candles()`, fetches Binance Spot 1m klines via REST (`/api/v3/klines`) for instantaneous startup calibration.
+     - Added `spot_cvd_1m`, `spot_cvd_zscore`, `spot_perp_divergence_z` to `DerivativesState`.
+  3. *Leverage Trap & Spot Squeeze Gates (`strategies/superhuman_evaluator.py`, `strategies/swing_momentum.py`):*
+     - **Leverage Trap Gate:** Rejects LONG setups on `SH1`, `SH4`, and `S4` with `"REJECT_LEVERAGE_DRIVEN_PUMP"` when $\Delta_{\text{CVD\_z}} \le -1.20\sigma$.
+     - **Spot Accumulation Squeeze Gate:** Rejects SHORT setups with `"REJECT_SPOT_ACCUMULATION_SQUEEZE"` when $\Delta_{\text{CVD\_z}} \ge +1.20\sigma$.
+  4. *SQLite Store Migration (`storage/sqlite_store.py`):* Idempotent migration adding `spot_cvd_1m`, `spot_cvd_zscore`, and `spot_perp_divergence_z` columns to `crypto_derivatives_state`.
+- **Verification Suites:**
+  - `test_quant_invariants.py`: 6/6 PASSED (100%).
+  - `test_phase4_dispatcher.py`: 4/4 PASSED (100%).
+  - `test_phase5_control.py`: 3/3 PASSED (100%).
+  - `test_os_foundation.py`: 6/6 PASSED (100%, includes Spot-Perp divergence test assertions).
+  - `test_crypto_copilot.py`: 6/6 PASSED (100%).
+  - `test_dual_desk_and_readiness.py`: 3/3 PASSED (100%).
+- **Deployment Status:** LOCAL CODE VERIFIED (100% tests passed). Awaiting explicit user instruction (`"you deploy"`) per `INV-OPS-001`.
 

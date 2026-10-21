@@ -76,6 +76,9 @@ class DerivativesState(BaseModel):
     cvd_1m: float = 0.0
     cvd_notional_usd_1m: float = 0.0
     cvd_notional_usd_zscore: float = 0.0
+    spot_cvd_1m: float = 0.0
+    spot_cvd_zscore: float = 0.0
+    spot_perp_divergence_z: float = 0.0
     taker_buy_ratio_1m: float = 0.5
     liquidation_notional_60s: float = 0.0
     liquidation_intensity: float = 1.0

@@ -431,6 +431,25 @@ def test_strategies_evaluation():
     assert cand_sh4_acc.decision == "ACCEPT", f"Expected SH4 ACCEPT, got {cand_sh4_acc.decision_reason}"
     print("      [OK] Strategy 4 & SH4 Clean 15m Pullback evaluated and ACCEPTED.")
 
+    # 4d. Test Spot-Perp CVD Divergence Guard (Reject leverage-driven pump)
+    deriv_s4_trap = DerivativesState(
+        symbol="BTCUSDT", mark_price=80010.0, index_price=80010.0, basis_bps=0.0,
+        open_interest=50000.0, funding_rate=0.0001, funding_interval_hours=8,
+        annualized_funding=3.28, funding_zscore_7d=0.0, funding_percentile=50.0,
+        distance_to_next_funding_mins=300, predicted_funding=0.0001,
+        cvd_1m=10.0, cvd_notional_usd_1m=800000.0, cvd_notional_usd_zscore=1.5,
+        spot_cvd_1m=-5.0, spot_cvd_zscore=-0.5, spot_perp_divergence_z=-2.0,
+        taker_buy_ratio_1m=0.6, liquidation_notional_60s=0.0, liquidation_intensity=0.0,
+        liquidation_oi_impact=0.0, regime="TRENDING_UP", quarantine_state="NORMAL",
+        state_time_ms=now_ms, created_at_iso=ms_to_iso(now_ms),
+        oi_change_pct_1h=0.5
+    )
+    cand_s4_trap = evaluate_swing_momentum(deriv_s4_trap, ob_s4, t_high)
+    cand_sh4_trap = evaluate_superhuman_swing(deriv_s4_trap, ob_s4, t_high)
+    assert cand_s4_trap.decision == "REJECT" and "REJECT_LEVERAGE_DRIVEN_PUMP" in cand_s4_trap.rejection_codes, f"Expected S4 REJECT_LEVERAGE_DRIVEN_PUMP, got {cand_s4_trap.decision_reason}"
+    assert cand_sh4_trap.decision == "REJECT" and "REJECT_LEVERAGE_DRIVEN_PUMP" in cand_sh4_trap.rejection_codes, f"Expected SH4 REJECT_LEVERAGE_DRIVEN_PUMP, got {cand_sh4_trap.decision_reason}"
+    print("      [OK] Strategy 4 & SH4 Spot-Perp CVD Divergence Guard verified.")
+
     # 5. Test Strategy Evaluator bootstrap
     strategies = strategy_evaluator.registry.get_active_strategies()
     assert len(strategies) >= 3, f"Expected at least 3 active strategies, got {len(strategies)}"

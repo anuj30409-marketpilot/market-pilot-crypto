@@ -38,6 +38,12 @@ class SymbolDerivativesTracker:
         self.recent_cvd_notionals: List[float] = []
         self.taker_buy_ratio_1m: float = 0.5
         self.last_candle_time_ms: int = 0
+
+        # Spot flow metrics (for Spot-Perp Divergence)
+        self.spot_cvd_1m: float = 0.0
+        self.spot_cvd_notional_usd_1m: float = 0.0
+        self.recent_spot_cvds: List[float] = []
+        self.last_spot_candle_time_ms: int = 0
         
         # Liquidation and price history for regime classification
         self.liquidation_notional_60s: float = 0.0
@@ -131,6 +137,29 @@ class SymbolDerivativesTracker:
             if self.recent_open_times:
                 self.recent_open_times.pop(0)
 
+    def update_from_spot_candle(self, c: Candle1m):
+        """Updates spot flow metrics from completed or in-progress Spot 1m bar."""
+        total_vol = c.volume
+        taker_buy = c.taker_buy_base_volume
+        taker_sell = max(0.0, total_vol - taker_buy)
+        self.spot_cvd_1m = taker_buy - taker_sell
+        mark = self.mark_price if self.mark_price > 0 else c.close
+        self.spot_cvd_notional_usd_1m = self.spot_cvd_1m * mark
+
+        is_new_candle = (c.open_time_ms > self.last_spot_candle_time_ms)
+        self.last_spot_candle_time_ms = c.open_time_ms
+
+        if is_new_candle or not self.recent_spot_cvds:
+            self.recent_spot_cvds.append(self.spot_cvd_notional_usd_1m)
+        else:
+            if self.recent_spot_cvds:
+                self.recent_spot_cvds[-1] = self.spot_cvd_notional_usd_1m
+            else:
+                self.recent_spot_cvds.append(self.spot_cvd_notional_usd_1m)
+
+        if len(self.recent_spot_cvds) > 60:
+            self.recent_spot_cvds.pop(0)
+
     def record_liquidation(self, notional_usd: float, timestamp_ms: Optional[int] = None):
         ts = timestamp_ms or now_utc_ms()
         self.liquidation_events.append((ts, notional_usd))
@@ -170,6 +199,26 @@ class SymbolDerivativesTracker:
             return (self.cvd_notional_usd_1m - mean) / std
         return 0.0
 
+    def compute_spot_cvd_zscore(self) -> float:
+        if len(self.recent_spot_cvds) < 10:
+            return 0.0
+        mean = sum(self.recent_spot_cvds) / len(self.recent_spot_cvds)
+        variance = sum((x - mean) ** 2 for x in self.recent_spot_cvds) / len(self.recent_spot_cvds)
+        std = variance ** 0.5
+        if std > 1e-9:
+            return (self.spot_cvd_notional_usd_1m - mean) / std
+        return 0.0
+
+    def compute_spot_perp_divergence_z(self) -> float:
+        """Computes Spot CVD z-score minus Perp CVD z-score.
+
+        Positive (> +1.0) = Spot whale accumulation / absorbing perp shorts.
+        Negative (< -1.0) = Leverage-driven perp pump unsupported by spot (retail trap).
+        """
+        if len(self.recent_spot_cvds) < 10 or len(self.recent_cvd_notionals) < 10:
+            return 0.0
+        return self.compute_spot_cvd_zscore() - self.compute_cvd_zscore()
+
     def compute_liquidation_intensity(self) -> float:
         if self.liquidation_notional_60s <= 0.0:
             return 1.0
@@ -191,6 +240,8 @@ class SymbolDerivativesTracker:
         liq_60s = self.get_liquidation_notional_60s(now_ms)
         funding_z = self.compute_funding_zscore()
         cvd_z = self.compute_cvd_zscore()
+        spot_z = self.compute_spot_cvd_zscore()
+        spot_perp_div = self.compute_spot_perp_divergence_z()
         liq_intensity = self.compute_liquidation_intensity()
         
         oi_usd = self.open_interest * self.mark_price
@@ -238,6 +289,9 @@ class SymbolDerivativesTracker:
             cvd_1m=self.cvd_1m,
             cvd_notional_usd_1m=self.cvd_notional_usd_1m,
             cvd_notional_usd_zscore=cvd_z,
+            spot_cvd_1m=self.spot_cvd_1m,
+            spot_cvd_zscore=spot_z,
+            spot_perp_divergence_z=spot_perp_div,
             taker_buy_ratio_1m=self.taker_buy_ratio_1m,
             liquidation_notional_60s=self.liquidation_notional_60s,
             liquidation_intensity=liq_intensity,
@@ -320,6 +374,27 @@ class DerivativesEngine:
                         if tracker.recent_cvd_notionals:
                             tracker.cvd_notional_usd_1m = tracker.recent_cvd_notionals[-1]
                         logger.info(f"Warmed up {len(bars)} 1m historical candles (incl. CVD & UTC timestamps) for {symbol}")
+
+            # Spot 1m klines warmup for Spot CVD baseline
+            spot_url = f"{settings.BINANCE_SPOT_REST}/api/v3/klines?symbol={symbol}&interval=1m&limit=60"
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                s_resp = await client.get(spot_url)
+                if s_resp.status_code == 200:
+                    s_bars = s_resp.json()
+                    tracker = self.trackers.get(symbol.upper())
+                    if tracker and s_bars:
+                        for sb in s_bars:
+                            s_c = float(sb[4])
+                            s_v = float(sb[5])
+                            s_tb = float(sb[9]) if len(sb) > 9 else (s_v * 0.5)
+                            s_ts = max(0.0, s_v - s_tb)
+                            s_cvd = s_tb - s_ts
+                            tracker.recent_spot_cvds.append(s_cvd * s_c)
+                        if len(tracker.recent_spot_cvds) > 60:
+                            tracker.recent_spot_cvds = tracker.recent_spot_cvds[-60:]
+                        if tracker.recent_spot_cvds:
+                            tracker.spot_cvd_notional_usd_1m = tracker.recent_spot_cvds[-1]
+                        logger.info(f"Warmed up {len(s_bars)} 1m Spot candles for {symbol} (Spot-Perp CVD baseline)")
         except Exception as e:
             logger.warning(f"Failed to warmup historical candles for {symbol}: {e}")
 
@@ -359,5 +434,10 @@ class DerivativesEngine:
                 state = self.trackers[upper].get_state(quarantine_state)
                 if state:
                     sqlite_store.upsert_derivatives_state(state)
+
+    def handle_spot_candle_update(self, candle: Candle1m):
+        upper = candle.symbol.upper()
+        if upper in self.trackers:
+            self.trackers[upper].update_from_spot_candle(candle)
 
 derivatives_engine = DerivativesEngine()

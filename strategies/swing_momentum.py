@@ -306,6 +306,16 @@ def evaluate_swing_momentum(
             rejection_codes.append("REJECT_LOW_VOLATILITY_CHOP")
             direction = None
 
+        # 5d. Spot-Perp CVD Divergence Guard
+        spot_perp_div = getattr(deriv, "spot_perp_divergence_z", 0.0)
+        if direction is not None and spot_perp_div != 0.0:
+            if direction == "LONG" and spot_perp_div <= -1.20:
+                rejection_codes.append("REJECT_LEVERAGE_DRIVEN_PUMP")
+                direction = None
+            elif direction == "SHORT" and spot_perp_div >= 1.20:
+                rejection_codes.append("REJECT_SPOT_ACCUMULATION_SQUEEZE")
+                direction = None
+
     # 6. Edge calculation
     if direction is not None:
         adx_factor = (adx_val / 20.0) if adx_val else 1.0

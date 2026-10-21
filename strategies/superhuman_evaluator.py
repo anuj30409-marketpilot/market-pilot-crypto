@@ -58,6 +58,14 @@ def evaluate_superhuman_macro_regime(deriv: DerivativesState, ob: OrderbookSnaps
     elif regime == "TRENDING_DOWN" and cvd_z > -1.60:
         rejections.append("REJECT_CVD_DIRECTION_MISMATCH")
 
+    # Spot-Perp CVD Divergence Guard
+    spot_perp_div = getattr(deriv, "spot_perp_divergence_z", 0.0)
+    if spot_perp_div != 0.0:
+        if cvd_z >= 0 and spot_perp_div <= -1.20:
+            rejections.append("REJECT_LEVERAGE_DRIVEN_PUMP")
+        elif cvd_z < 0 and spot_perp_div >= 1.20:
+            rejections.append("REJECT_SPOT_ACCUMULATION_SQUEEZE")
+
     # Edge calculation: 1.6σ CVD yields ~13.6 bps gross edge; friction is ~10-11 bps
     expected_edge_bps = abs(cvd_z) * 8.5  # e.g. 1.6 * 8.5 = 13.6 bps
     expected_net_edge_bps = expected_edge_bps - friction_bps
@@ -358,6 +366,16 @@ def evaluate_superhuman_swing(deriv: DerivativesState, ob: OrderbookSnapshot, tr
         elif direction == "SHORT" and cvd_z > -0.25:
             rejections.append("REJECT_CVD_DIRECTION_MISMATCH")
             direction = None
+
+        # 5b. Spot-Perp CVD Divergence Guard
+        spot_perp_div = getattr(deriv, "spot_perp_divergence_z", 0.0)
+        if spot_perp_div != 0.0 and direction is not None:
+            if direction == "LONG" and spot_perp_div <= -1.20:
+                rejections.append("REJECT_LEVERAGE_DRIVEN_PUMP")
+                direction = None
+            elif direction == "SHORT" and spot_perp_div >= 1.20:
+                rejections.append("REJECT_SPOT_ACCUMULATION_SQUEEZE")
+                direction = None
 
         # 6. Edge
         adx_factor = (adx_val / 20.0) if adx_val else 1.0

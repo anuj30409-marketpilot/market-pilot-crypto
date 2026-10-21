@@ -184,6 +184,11 @@ class SQLiteStore:
             self._add_column_if_missing(conn, "crypto_paper_positions", "stop_loss_distance_usd", "REAL DEFAULT 0.0")
             self._add_column_if_missing(conn, "crypto_paper_positions", "desk", "TEXT DEFAULT 'QUANT'")
 
+            # Run migrations for derivatives state (Spot-Perp CVD divergence)
+            self._add_column_if_missing(conn, "crypto_derivatives_state", "spot_cvd_1m", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_derivatives_state", "spot_cvd_zscore", "REAL DEFAULT 0.0")
+            self._add_column_if_missing(conn, "crypto_derivatives_state", "spot_perp_divergence_z", "REAL DEFAULT 0.0")
+
             # Overmind AI Desk Migration (idempotent update preserving historical provenance)
             table_check = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='crypto_paper_positions'").fetchone()
             if table_check:
@@ -267,10 +272,11 @@ class SQLiteStore:
                 annualized_funding, funding_zscore_7d, funding_percentile,
                 distance_to_next_funding_mins, predicted_funding,
                 cvd_1m, cvd_notional_usd_1m, cvd_notional_usd_zscore,
+                spot_cvd_1m, spot_cvd_zscore, spot_perp_divergence_z,
                 taker_buy_ratio_1m, liquidation_notional_60s,
                 liquidation_intensity, liquidation_oi_impact,
                 regime, quarantine_state, state_time_ms, created_at_iso
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(symbol, state_time_ms) DO UPDATE SET
                 mark_price = excluded.mark_price,
                 index_price = excluded.index_price,
@@ -286,6 +292,9 @@ class SQLiteStore:
                 cvd_1m = excluded.cvd_1m,
                 cvd_notional_usd_1m = excluded.cvd_notional_usd_1m,
                 cvd_notional_usd_zscore = excluded.cvd_notional_usd_zscore,
+                spot_cvd_1m = excluded.spot_cvd_1m,
+                spot_cvd_zscore = excluded.spot_cvd_zscore,
+                spot_perp_divergence_z = excluded.spot_perp_divergence_z,
                 taker_buy_ratio_1m = excluded.taker_buy_ratio_1m,
                 liquidation_notional_60s = excluded.liquidation_notional_60s,
                 liquidation_intensity = excluded.liquidation_intensity,
@@ -299,6 +308,7 @@ class SQLiteStore:
                 s.annualized_funding, s.funding_zscore_7d, s.funding_percentile,
                 s.distance_to_next_funding_mins, s.predicted_funding,
                 s.cvd_1m, s.cvd_notional_usd_1m, s.cvd_notional_usd_zscore,
+                getattr(s, "spot_cvd_1m", 0.0), getattr(s, "spot_cvd_zscore", 0.0), getattr(s, "spot_perp_divergence_z", 0.0),
                 s.taker_buy_ratio_1m, s.liquidation_notional_60s,
                 s.liquidation_intensity, s.liquidation_oi_impact,
                 s.regime, s.quarantine_state,
