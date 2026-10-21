@@ -510,5 +510,5 @@
   - `test_os_foundation.py`: 6/6 PASSED (100%, includes Spot-Perp divergence test assertions).
   - `test_crypto_copilot.py`: 6/6 PASSED (100%).
   - `test_dual_desk_and_readiness.py`: 3/3 PASSED (100%).
-- **Deployment Status:** LOCAL CODE VERIFIED (100% tests passed). Awaiting explicit user instruction (`"you deploy"`) per `INV-OPS-001`.
+- **Deployment Status:** DEPLOYED TO ORACLE VM 2 (Commit a79f770, PID 206808). All 6 verification suites passed cleanly on VM 2 (100%), Spot 1m kline stream active, live endpoints operational.
 
